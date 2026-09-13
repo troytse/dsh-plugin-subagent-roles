@@ -1,0 +1,13 @@
+# dsh-plugin-subagent-roles bundle patch.
+#
+# Adds the plugin's single row. It MUST land at the PROFILE ROOT (the host
+# plane): the role catalog's visibility guard reads the global tool layer, so a
+# copy mounted inside an agent preset would advertise nothing. It publishes no
+# service, so it needs no `isolate` realm — it only consumes the host `tools`,
+# `subagents`, and `systemPrompt` registries.
+#
+# Install: dsh plugin --profile <name> add link:<absolute checkout path>
+# Restart `dsh --profile <name>` after installing.
+- insert:
+    - id: subagent-roles
+      name: dsh-plugin-subagent-roles
