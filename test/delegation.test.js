@@ -40,6 +40,7 @@ function fakeHost(options = {}) {
     name: 'spawn',
     capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, ...options.capabilities },
     ...(options.inheritsParentContext === true ? { inheritsParentContext: true } : {}),
+    ...(options.agentRouteDefaults !== undefined ? { agentRouteDefaults: options.agentRouteDefaults } : {}),
     ...(options.prepareContinuable === false ? {} : { prepareContinuable: () => Promise.resolve({}) }),
   }
   const ctx = {
@@ -49,9 +50,11 @@ function fakeHost(options = {}) {
       error: (message) => calls.warnings.push(String(message)),
     },
     get: (name) => {
-      if (name === 'llm') return { listProviders: () => [{ id: 'deepseek-official' }] }
+      if (name === 'llm') return options.llm ?? { listProviders: () => [{ id: 'deepseek-official' }] }
       if (name === 'settings') return options.settings
       if (name === 'jobs') return options.jobs
+      if (name === 'sessionProjections') return options.sessionProjections
+      if (name === 'sessions') return options.sessions
       return undefined
     },
     tools: {
@@ -78,12 +81,30 @@ function fakeHost(options = {}) {
   return { ctx, provider, loader, calls }
 }
 
+/** The route the delegating agent is already on. */
+const PARENT_ROUTE = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+
 function exec(overrides = {}) {
-  return { agent: { session: { header: { cwd: '/p' } } }, signal: new AbortController().signal, ...overrides }
+  const agent = {
+    options: { ...PARENT_ROUTE },
+    session: { header: { cwd: '/p' }, requestHeader: () => ({ config: { ...PARENT_ROUTE } }) },
+    ...(overrides.agent ?? {}),
+  }
+  return { ...overrides, agent, signal: overrides.signal ?? new AbortController().signal }
 }
 
 function tool(host, config = {}) {
   return createRoleTool({ ctx: host.ctx, config: new Config(config), provider: host.provider, loader: host.loader })
+}
+
+/** The message of a rejection, or a failure if the promise resolved. */
+async function rejectionMessage(promise) {
+  try {
+    await promise
+  } catch (error) {
+    return error.message
+  }
+  throw new Error('expected a rejection, but the call resolved')
 }
 
 describe('subagent_role: argument and role resolution', () => {
@@ -369,5 +390,178 @@ describe('subagent_roles (diagnostic tool)', () => {
     const text = await definition.execute({}, exec())
     assert.match(text, /visible tools: unreadable/)
     assert.match(text, /expanded \(tool catalog unreadable/)
+  })
+})
+
+describe('subagent_role: LLM route preflight', () => {
+  /** An llm seam whose resolveCallConfig accepts exactly one route. */
+  const strictLlm = (resolved = []) => ({
+    listProviders: () => [{ id: 'deepseek-official' }],
+    resolveCallConfig: async (config) => {
+      resolved.push(config)
+      const knownModel = config.provider === 'deepseek-official' && config.model === 'deepseek-v4-flash'
+      if (!knownModel) throw new Error(`unknown model "${config.model}" for provider "${config.provider}"`)
+      if (config.reasoningEffort !== undefined && config.reasoningEffort !== 'low') {
+        throw new Error(`unknown reasoning effort "${config.reasoningEffort}"`)
+      }
+    },
+  })
+
+  test('the effective route is resolved through the live adapter', async () => {
+    const resolved = []
+    const host = fakeHost({ llm: strictLlm(resolved) })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.deepEqual(resolved, [{ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'low' }])
+    assert.equal(host.calls.start.length, 1)
+  })
+
+  test('an unknown model is refused with a correctable message, not an opaque one', async () => {
+    const host = fakeHost({ roles: [{ ...ROLE, model: 'deepseek-v9-typo' }], llm: strictLlm() })
+    const message = await rejectionMessage(tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()))
+    assert.match(message, /cannot resolve the child LLM route `deepseek-official\/deepseek-v9-typo`/)
+    assert.match(message, /unknown model "deepseek-v9-typo"/)
+    assert.equal(host.calls.start.length, 0)
+  })
+
+  test('an unknown reasoning effort is refused before any child is created', async () => {
+    const host = fakeHost({ roles: [{ ...ROLE, reasoningEffort: 'turbo' }], llm: strictLlm() })
+    await assert.rejects(
+      tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()),
+      /with reasoning effort `turbo`/,
+    )
+    assert.equal(host.calls.start.length, 0)
+  })
+
+  test('a deployment without the seam degrades to provider membership', async () => {
+    const host = fakeHost({ roles: [{ ...ROLE, model: 'anything-at-all' }] })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start.length, 1)
+  })
+
+  test('an unreadable provider list is not evidence that the route is wrong', async () => {
+    const host = fakeHost({ llm: { listProviders: () => { throw new Error('llm registry down') } } })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start.length, 1)
+  })
+})
+
+describe('subagent_role: provider route defaults', () => {
+  const defaults = { provider: 'provider-default', model: 'provider-model' }
+
+  test('defaults fill a route the role did not bind', async () => {
+    const llm = { listProviders: () => [{ id: 'deepseek-official' }, { id: 'provider-default' }] }
+    const host = fakeHost({ roles: [{ ...ROLE, provider: undefined, model: undefined, reasoningEffort: 'low' }], agentRouteDefaults: defaults, llm })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.deepEqual(host.calls.start[0].request.agentOptions, { provider: 'provider-default', model: 'provider-model', reasoningEffort: 'low' })
+  })
+
+  test('a role that binds nothing at all still inherits the parent', async () => {
+    const host = fakeHost({ roles: [{ ...ROLE, provider: undefined, model: undefined, reasoningEffort: undefined }], agentRouteDefaults: defaults })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start[0].request.agentOptions, undefined)
+  })
+
+  test('defaults never resurrect a route the authorized list rejected', async () => {
+    const settings = { get: () => ({ enabled: true, allowedModels: [{ provider: 'deepseek-official', model: 'deepseek-v4-flash' }] }) }
+    const rejected = { ...ROLE, provider: 'local', model: 'Qwen3.6-35B-A3B' }
+    const host = fakeHost({ settings, roles: [rejected], agentRouteDefaults: defaults })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start[0].request.agentOptions, undefined)
+    assert.match(host.calls.warnings.join('\n'), /not in the authorized model list/)
+  })
+
+  test('the role binding wins over the provider defaults', async () => {
+    const host = fakeHost({ agentRouteDefaults: defaults })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.deepEqual(host.calls.start[0].request.agentOptions, { provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'low' })
+  })
+})
+
+describe('subagent_role: durable model-selection policy', () => {
+  const routes = [{ provider: 'captured', model: 'captured-model' }]
+
+  test('a captured per-Session policy wins over the live setting', async () => {
+    const settings = { get: () => ({ enabled: true, allowedModels: [{ provider: 'live', model: 'live-model' }] }) }
+    const projections = { stateOf: () => routes }
+    const host = fakeHost({ settings, sessionProjections: projections })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    // The role route is not in the captured list, so it is dropped.
+    assert.equal(host.calls.start[0].request.agentOptions, undefined)
+    assert.match(host.calls.warnings.join('\n'), /not in the authorized model list/)
+  })
+
+  test('the live setting seeds a Session that captured nothing', async () => {
+    const settings = { get: () => ({ enabled: true, allowedModels: routes }) }
+    const projections = { stateOf: () => null }
+    const host = fakeHost({ settings, sessionProjections: projections })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start[0].request.agentOptions, undefined)
+  })
+
+  test('a child Session inherits its parent Session policy', async () => {
+    const settings = { get: () => ({ enabled: true, allowedModels: [] }) }
+    const child = { header: { cwd: '/p', origin: 'subagent', parentSession: 'parent-1' } }
+    const parent = { id: 'parent-1' }
+    const projections = { stateOf: (session) => (session === parent ? routes : null) }
+    const host = fakeHost({ settings, sessionProjections: projections, sessions: { get: (id) => (id === 'parent-1' ? parent : undefined) } })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec({ agent: { session: child } }))
+    assert.equal(host.calls.start[0].request.agentOptions, undefined)
+    assert.match(host.calls.warnings.join('\n'), /not in the authorized model list/)
+  })
+
+  test('an unreadable projection service is not a constraint', async () => {
+    const settings = { get: () => ({ enabled: true, allowedModels: routes }) }
+    const projections = { stateOf: () => { throw new Error('projection registry closed') } }
+    const host = fakeHost({ settings, sessionProjections: projections })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.match(host.calls.warnings.join('\n'), /not in the authorized model list/)
+  })
+})
+
+describe('subagent_role: shared display names', () => {
+  test('a label shared by two roles is reported instead of silently picked', async () => {
+    const twin = { ...ROLE, id: 'web-verifier-global', source: 'global' }
+    const host = fakeHost({ roles: [ROLE, twin] })
+    await tool(host).execute({ role: 'Web 验证者', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start.length, 1)
+    assert.match(host.calls.warnings.join('\n'), /shared by 2 roles \(web-verifier, web-verifier-global\); resolved to id "web-verifier"/)
+  })
+
+  test('an id always wins over a clashing label', async () => {
+    const twin = { ...ROLE, id: 'decoy', displayName: 'web-verifier' }
+    const host = fakeHost({ roles: [twin, ROLE] })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.warnings.length, 0)
+  })
+})
+
+describe('subagent_role: row knobs', () => {
+  test('timeoutMs reaches the tool definition only when configured', () => {
+    assert.equal(tool(fakeHost()).timeoutMs, undefined)
+    assert.equal(tool(fakeHost(), { timeoutMs: 2500 }).timeoutMs, 2500)
+  })
+
+  test('the log reports the mode the call actually takes', async () => {
+    const host = fakeHost()
+    await tool(host, { backgroundMode: 'continuable', enableRunInBackground: false })
+      .execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.match(host.calls.infos.join('\n'), /mode=foreground/)
+    assert.equal(host.calls.continuable.length, 0)
+  })
+
+  test('the log reports the resolved route layer', async () => {
+    const bound = fakeHost()
+    await tool(bound).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.match(bound.calls.infos.join('\n'), /routeLayer=role/)
+
+    const inherited = fakeHost({ roles: [{ ...ROLE, provider: undefined, model: undefined, reasoningEffort: undefined }] })
+    await tool(inherited).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.match(inherited.calls.infos.join('\n'), /routeLayer=inherit/)
+  })
+
+  test('the diagnostic tool honours a configured name', () => {
+    const host = fakeHost()
+    assert.equal(createRoleListTool({ ctx: host.ctx, config: new Config({}), loader: host.loader }).name, 'subagent_roles')
+    assert.equal(createRoleListTool({ ctx: host.ctx, config: new Config({ listToolName: 'roles_report' }), loader: host.loader }).name, 'roles_report')
   })
 })
