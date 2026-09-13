@@ -29,12 +29,13 @@
     "yaml": "^2.5.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-subagent": "*",
-    "@deepseek-ai/dsh-tools": "*"
+    "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/dsh-subagent": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "dsh": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
   },
   "repository": {
     "type": "git",
