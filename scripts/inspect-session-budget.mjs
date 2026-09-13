@@ -158,7 +158,10 @@ if (argv.includes('--all')) {
 }
 const role = tools.find((tool) => tool.name === 'subagent_role')
 if (role !== undefined) {
-  const owner = String(role.description).startsWith('Delegate a self-contained task to a role defined by a role file')
+  // Matches BOTH of this plugin's wordings (a fork transport drops the
+  // "self-contained" clause) while still rejecting the official `subagent`
+  // tool, which says "to a subagent" rather than "to a role defined by a role file".
+  const owner = /^Delegate a (?:self-contained )?task to a role defined by a role file/.test(String(role.description))
     ? 'this plugin'
     : 'another registration of the same name'
   console.log(`subagent_role: ${JSON.stringify(role).length} chars — ${owner}`)
