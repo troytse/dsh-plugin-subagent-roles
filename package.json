@@ -18,7 +18,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "lint": "for f in lib/*.js scripts/*.mjs test/*.js; do node --check \"$f\" || exit 1; done"
   },
   "dsh": {
     "bundle": {
@@ -33,6 +34,9 @@
     "@deepseek-ai/cordis": "^4.0.0",
     "@deepseek-ai/dsh-subagent": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
     "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tool-subagent": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
   },
   "engines": {
     "node": ">=20",
