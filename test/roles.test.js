@@ -97,7 +97,7 @@ describe('tool policy normalization', () => {
 describe('role documents', () => {
   const valid = [
     '---',
-    'displayName: 浏览器操作员',
+    'displayName: Web 验证者',
     'description: 浏览器调试与验证',
     'whenToUse: E2E',
     'provider: deepseek-official',
@@ -105,22 +105,22 @@ describe('role documents', () => {
     'reasoningEffort: low',
     'tools: [bash, read, "mcp__demo__*"]',
     '---',
-    '你是操作员。',
+    '你是验证者。',
     '第二行。',
   ].join('\n')
 
   test('parses a complete role', () => {
-    const { role, error } = parseRoleDocument('web-operator', valid)
+    const { role, error } = parseRoleDocument('web-verifier', valid)
     assert.equal(error, undefined)
-    assert.equal(role.id, 'web-operator')
-    assert.equal(role.displayName, '浏览器操作员')
+    assert.equal(role.id, 'web-verifier')
+    assert.equal(role.displayName, 'Web 验证者')
     assert.equal(role.description, '浏览器调试与验证')
     assert.equal(role.whenToUse, 'E2E')
     assert.equal(role.provider, 'deepseek-official')
     assert.equal(role.model, 'deepseek-v4-flash')
     assert.equal(role.reasoningEffort, 'low')
     assert.deepEqual(role.toolFilter, { allow: ['bash', 'read', 'mcp__demo__*'] })
-    assert.equal(role.persona, '你是操作员。\n第二行。')
+    assert.equal(role.persona, '你是验证者。\n第二行。')
   })
 
   test('displayName defaults to the id', () => {
@@ -133,7 +133,7 @@ describe('role documents', () => {
   })
 
   test('rejects a non-kebab id', () => {
-    assert.match(parseRoleDocument('Web_Operator', '---\ndescription: d\n---\np').error, /not kebab-case/)
+    assert.match(parseRoleDocument('Bad_Id', '---\ndescription: d\n---\np').error, /not kebab-case/)
   })
 
   test('rejects a mismatched name field', () => {

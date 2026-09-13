@@ -43,13 +43,13 @@ dsh web
 
 ```markdown
 ---
-displayName: 浏览器操作员            # 可选，默认取 id
-description: 浏览器/Web 端调试与验证执行者…   # 必填：唯一进入委派方目录的文本
-whenToUse: 前端 E2E、服务启停…        # 可选，追加在目录行末尾
+displayName: 代码审查员              # 可选，默认取 id
+description: 审查代码质量、安全与可维护性，输出结构化评审意见   # 必填：唯一进入委派方目录的文本
+whenToUse: 提交前复核…               # 可选，追加在目录行末尾
 provider: deepseek-official         # 路由（与 model 成对）；工具不接受逐次覆盖
 model: deepseek-v4-flash
 reasoningEffort: low
-tools: [bash, read, grep, glob, read_image, 'mcp__demo__*']   # 支持通配符
+tools: [read, grep, glob]           # 白名单；支持通配符如 'mcp__demo__*'
 # 或：toolFilter: { allow: [...] } / { deny: [...] }
 ---
 角色 persona 正文。只有委派时才读盘注入子代理，永不进入委派方上下文。

@@ -3,7 +3,7 @@ import { describe, test } from 'node:test'
 import { catalogDescription, renderRoleCatalog } from '../lib/catalog.js'
 
 const roles = [
-  { id: 'web-operator', displayName: '浏览器操作员', description: '浏览器/Web 端调试与验证执行者' },
+  { id: 'web-verifier', displayName: 'Web 验证者', description: '浏览器/Web 端调试与验证执行者' },
   { id: 'plain', displayName: 'plain', description: 'no display name branch' },
 ]
 
@@ -13,7 +13,7 @@ describe('catalog rendering', () => {
     const lines = text.split('\n')
     assert.equal(lines.length, 3)
     assert.match(lines[0], /subagent_role/)
-    assert.match(lines[1], /^- `web-operator` \(浏览器操作员\): 浏览器/)
+    assert.match(lines[1], /^- `web-verifier` \(Web 验证者\): 浏览器/)
     assert.match(lines[2], /^- `plain`: no display name branch$/)
   })
 

@@ -64,7 +64,7 @@ function fixtureProject() {
   const project = sandbox()
   mkdirSync(join(project, '.git'), { recursive: true })
   mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
-  writeFileSync(join(project, '.dsh', 'roles', 'web-operator.md'), '---\ndisplayName: 浏览器操作员\ndescription: 浏览器调试与验证\ntools: [read]\n---\nPERSONA-BODY')
+  writeFileSync(join(project, '.dsh', 'roles', 'web-verifier.md'), '---\ndisplayName: Web 验证者\ndescription: 浏览器调试与验证\ntools: [read]\n---\nPERSONA-BODY')
   return project
 }
 
@@ -94,7 +94,7 @@ describe('plugin wiring', () => {
     const host = stubHost()
     apply(host.ctx, new Config({}))
     const text = host.sections[0].text(agentAt(project, 0))
-    assert.match(text, /^- `web-operator` \(浏览器操作员\): 浏览器调试与验证$/m)
+    assert.match(text, /^- `web-verifier` \(Web 验证者\): 浏览器调试与验证$/m)
     assert.equal(text.includes('PERSONA-BODY'), false)
     assert.equal(host.sections[0].text(agentAt(project, 1)), '')
   })
@@ -103,7 +103,7 @@ describe('plugin wiring', () => {
     const project = fixtureProject()
     const host = stubHost()
     apply(host.ctx, new Config({ catalogScope: 'all' }))
-    assert.match(host.sections[0].text(agentAt(project, 1)), /web-operator/)
+    assert.match(host.sections[0].text(agentAt(project, 1)), /web-verifier/)
   })
 
   test('a project without role files contributes nothing', () => {
@@ -132,7 +132,7 @@ describe('plugin wiring', () => {
     const host = stubHost()
     apply(host.ctx, new Config({}))
     const text = host.sections[0].text(agentAt(project, 0))
-    assert.match(text, /web-operator/)
+    assert.match(text, /web-verifier/)
     assert.equal(text.includes('broken'), false)
     assert.equal(host.warnings.some((message) => message.includes('broken.md')), true)
   })
