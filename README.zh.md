@@ -1,6 +1,6 @@
 # dsh-plugin-subagent-roles
 
-[English](README.md) | 中文
+[English](README.md) | 中文 | [更新日志](CHANGELOG.md)
 
 [![npm](https://img.shields.io/npm/v/dsh-plugin-subagent-roles)](https://www.npmjs.com/package/dsh-plugin-subagent-roles)
 [![CI](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml)
@@ -168,7 +168,11 @@ CI 在 Node.js 20、22、24 上运行 `npm run lint` 与 `npm test`。
 
 ### 发版
 
-`npm version <patch|minor|major>` 会提交版本号变更并打 tag，推送提交与 tag 后，`.github/workflows/publish.yml` 会跑测试、校验 tag 与 `package.json` 版本一致，再通过 npm trusted publishing（OIDC）发布并附带 provenance 证明，因此仓库里不保存任何长期 token。首次自动发版前，需要先在 npm 的包设置页把 `publish.yml` 登记为 trusted publisher。
+1. 先在 `CHANGELOG.md` 补一条 `## [<版本号>]` 记录。发版工作流会拒绝发布一个更新日志里没有的版本。
+2. `npm version <patch|minor|major>` 会提交版本号变更并打 tag，推送提交与 tag。
+3. `.github/workflows/publish.yml` 会跑测试、校验 tag 与 `package.json` 版本一致、校验更新日志条目，再通过 npm trusted publishing（OIDC）发布并附带 provenance 证明，因此仓库里不保存任何长期 token。
+
+首次自动发版前，需要先在 npm 的包设置页把 `publish.yml` 登记为 trusted publisher。
 
 ## 许可
 
