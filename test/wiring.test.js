@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { Config } from '../lib/config.js'
-import { CATALOG_SECTION_NAME, apply } from '../lib/index.js'
+import { CATALOG_SECTION_NAME, apply, catalogSectionName } from '../lib/index.js'
 
 const roots = []
 function sandbox() {
@@ -49,6 +49,11 @@ function stubHost(options = {}) {
     get: (name) => (name === 'systemPrompt' ? (options.noSystemPrompt === true ? undefined : systemPrompt) : undefined),
     tools: {
       register: (definition) => {
+        // The real registry throws on a duplicate name in one scope; the stub
+        // must too, or a two-row collision would pass here and break in a profile.
+        if (registered.some((existing) => existing.name === definition.name)) {
+          throw new Error(`tool "${definition.name}" is already registered`)
+        }
         registered.push(definition)
         return () => {
           const at = registered.indexOf(definition)
@@ -65,6 +70,9 @@ function stubHost(options = {}) {
   const systemPrompt = {
     section: (definition) => {
       if (options.sectionThrows === true) throw new Error('section registry is closed')
+      if (sections.some((existing) => existing.name === definition.name)) {
+        throw new Error(`prompt section "${definition.name}" is already registered`)
+      }
       sections.push(definition)
       return () => {}
     },
@@ -202,5 +210,27 @@ describe('plugin wiring', () => {
     apply(host.ctx, new Config({}))
     const broken = { session: { header: { cwd: { not: 'a path' } } }, options: {} }
     assert.equal(host.sections[0].text({ agent: broken, scope: broken }), '')
+  })
+
+  test('two rows coexist: each keeps its own catalog section and tool names', () => {
+    const host = stubHost()
+    apply(host.ctx, new Config({ toolName: 'subagent_role', enableListTool: true }))
+    apply(host.ctx, new Config({ toolName: 'subagent_role_fork', enableListTool: true, listToolName: 'subagent_roles_fork' }))
+    assert.deepEqual(host.registered.map((definition) => definition.name), [
+      'subagent_role', 'subagent_roles', 'subagent_role_fork', 'subagent_roles_fork',
+    ])
+    assert.deepEqual(host.sections.map((section) => section.name), [
+      'subagent_role:catalog', 'subagent_role_fork:catalog',
+    ])
+    // Nothing was swallowed: a hardcoded section or tool name would have thrown.
+    assert.deepEqual(host.errors, [])
+  })
+
+  test('the catalog section name follows the configured tool name', () => {
+    assert.equal(catalogSectionName('role_delegate'), 'role_delegate:catalog')
+    assert.equal(catalogSectionName(undefined), 'subagent_role:catalog')
+    const host = stubHost()
+    apply(host.ctx, new Config({ toolName: 'role_delegate' }))
+    assert.equal(host.sections[0].name, 'role_delegate:catalog')
   })
 })
