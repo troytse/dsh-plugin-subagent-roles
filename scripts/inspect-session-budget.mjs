@@ -110,11 +110,27 @@ function textOf(node) {
 }
 
 const argv = process.argv.slice(2)
+/**
+ * Read one flag's value, refusing a missing one. A flag whose value is absent —
+ * or is itself the next flag — used to flow through as `undefined`, which threw
+ * a bare TypeError for `--project` and silently searched for the literal string
+ * "undefined" for `--grep`.
+ */
+function flagValue(flag) {
+  const at = argv.indexOf(flag)
+  if (at < 0) return undefined
+  const value = argv[at + 1]
+  if (value === undefined || value.startsWith('--')) {
+    console.error(`${flag} requires a value`)
+    process.exit(2)
+  }
+  return value
+}
 let sessionDir
-const projectFlag = argv.indexOf('--project')
-if (projectFlag >= 0) {
-  sessionDir = newestSessionDir(sessionRootFor(argv[projectFlag + 1]))
-} else if (argv[0] !== undefined) {
+const projectDir = flagValue('--project')
+if (projectDir !== undefined) {
+  sessionDir = newestSessionDir(sessionRootFor(projectDir))
+} else if (argv[0] !== undefined && !argv[0].startsWith('--')) {
   sessionDir = argv[0]
 } else {
   console.error('usage: inspect-session-budget.mjs <session-dir> | --project <project-dir>')
@@ -136,9 +152,8 @@ if (systemText !== undefined) {
   console.log(`system prompt: ${systemText.length} chars`)
   const catalog = systemText.includes('Roles come from role files')
   console.log(`role catalog : ${catalog ? 'present' : 'absent'}`)
-  const grepFlag = argv.indexOf('--grep')
-  if (grepFlag >= 0) {
-    const needle = argv[grepFlag + 1]
+  const needle = flagValue('--grep')
+  if (needle !== undefined) {
     const at = systemText.indexOf(needle)
     console.log(`contains ${JSON.stringify(needle)}: ${at >= 0 ? 'YES' : 'no'}`)
     if (at >= 0) console.log(`  …${systemText.slice(Math.max(0, at - 60), at + needle.length + 60).replaceAll('\n', ' / ')}…`)

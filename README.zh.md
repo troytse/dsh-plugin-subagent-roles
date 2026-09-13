@@ -67,6 +67,7 @@ frontmatter 是 YAML 映射，正文是 persona。
 | 字段 | 必填 | 含义 |
 |---|---|---|
 | `description` | 是 | 目录里显示的一行描述，主代理据此判断要不要委派。 |
+| `name` | 否 | 写了就必须与文件 id 一致，用来拦住"改了文件名却没改声明"。 |
 | `displayName` | 否 | 人可读的名字，默认取 id。 |
 | `whenToUse` | 否 | 追加在目录行末尾的补充路由提示。 |
 | `provider`、`model` | 否 | 子代理的模型路由。两者必须同时出现或同时省略；省略时继承主代理的路由。 |
@@ -76,7 +77,7 @@ frontmatter 是 YAML 映射，正文是 persona。
 
 `tools` 与 `toolFilter` 只能二选一。**未知的 frontmatter 键会被拒绝**而不是忽略，避免拼写错误悄悄放宽角色的工具范围。
 
-persona 正文可以使用 `{{cwd}}`、`{{model}}`、`{{provider}}` 三个提示词变量，由框架在子代理侧插值。引用按精确规则匹配（花括号内不能有空格）；而目录字段——`description`、`displayName`、`whenToUse`——**完全不能出现 `{{`**，因为目录文本在到达模型之前同样会经过插值。
+persona 正文可以使用 `{{cwd}}`、`{{model}}`、`{{provider}}`——**恰好是 agent loop 注册的那三个**，由框架在子代理侧插值。部署里若另有插件注册了更多变量，可在 `personaVariables` 中列出；除此之外的任何引用都会在读取角色文件时被拒绝，因为未知变量会让**该子代理的每一轮**都抛错。引用按精确规则匹配（花括号内不能有空格）；而目录字段——`description`、`displayName`、`whenToUse`——**完全不能出现 `{{`**，因为目录文本在到达模型之前同样会经过插值。
 
 ## 配置
 
@@ -102,11 +103,15 @@ persona 正文可以使用 `{{cwd}}`、`{{model}}`、`{{provider}}` 三个提示
 | `catalogScope` | `main` | `main` 只向顶层 agent 展示角色；`all` 连子代理也展示。 |
 | `catalogDescriptionMaxLength` | `160` | 目录行里每条描述的截断长度。 |
 | `projectRootMarkers` | `['.git']` | 从会话工作目录向上寻找项目根的标记。 |
+| `projectRootTtlMs` | `5000` | 项目根结果被信任多久后重新向上查找，好让会话运行中 `git init` 也能被发现。 |
 | `dshHome` | `$DSH_HOME` 或 `~/.dsh` | 全局 `roles/` 目录所在位置。 |
-| `maxBodyBytes` | `65536` | persona 体积上限，按 UTF-8 字节计。 |
-| `respectModelSelection` | `true` | 是否遵守官方 `subagent-model-selection` 允许清单。 |
+| `maxBodyBytes` | `65536` | persona 体积上限，按 UTF-8 字节计。超过该值加 64 KiB frontmatter 余量的文件**在读取之前**就被拒绝。 |
+| `personaVariables` | `['cwd', 'model', 'provider']` | 允许 persona 引用的提示词变量。仅当部署确实注册了更多变量时才扩充。 |
+| `respectModelSelection` | `true` | 是否遵守官方 `subagent-model-selection` 允许清单：先看会话已捕获的策略，再看实时设置。 |
 | `onMissingTool` | `drop` | 不可用的工具名：`drop` 告警后继续，`error` 直接拒绝委派。 |
-| `enableListTool` | `false` | 是否注册诊断工具 `subagent_roles`。 |
+| `timeoutMs` | 不设 | 单次前台委派的工具调用超时。不设则不限时。 |
+| `enableListTool` | `false` | 是否注册诊断工具。 |
+| `listToolName` | `subagent_roles` | 诊断工具的名字，让第二行能与之共存。 |
 
 ## 工具策略
 
@@ -135,7 +140,8 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 ## 工作原理
 
 - **目录**：一个提示词 section，按每次组装求值，列出该 agent 工作区的角色：一行说明，加每个角色一行 `- <id> (<显示名>): <描述>`。在以下情况渲染为空且不占上下文——项目没有角色、目录被关闭、当前是子代理、或该 agent 看不到委派工具。
-- **委派**：`subagent_role` 按主代理的工作目录解析角色，然后经 `ctx.subagents` 启动子代理，带上该角色的 persona、路由与工具策略。工具面向模型的说明会跟随传输 provider：fork 型 provider 的子代理已带上本会话已完成的轮次，此时说明改成「在已有轮次上继续」，而不是「必须自带完整上下文」。
+- **委派**：`subagent_role` 按主代理的工作目录解析角色，然后经 `ctx.subagents` 启动子代理，带上该角色的 persona、路由与工具策略。工具面向模型的说明会跟随传输 provider：fork 型 provider 的子代理已带上本会话已完成的轮次，此时说明改成「在已有轮次上继续」，而不是「必须自带完整上下文」。路由在子代理存在之前就会经 `llm.resolveCallConfig()` 预检，因此角色文件里 `model` 或 `reasoningEffort` 写错时，报错会回到主代理手上，而不是从子代理创建过程里抛出。
+- **多行共存**：目录 section 与诊断工具都按行命名（`<toolName>:catalog`、`listToolName`），所以同一个 profile 可以为另一种传输 provider 再挂一行（`toolName: subagent_role_fork`），两边都不会撞名。
 - **继承**：子代理加入父代理的 agent preset，因此保留父代理的提示词与工具，仅由角色策略移除其中一部分。角色 persona 只对该子代理遮蔽部署 persona 前缀。
 
 ## 已知边界
@@ -143,20 +149,22 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 - 子代理**自己作用域**里注册的工具不受角色工具策略影响：核心的 restrict 只作用于继承来的工具。委派运行时与部分工具插件会按 agent 注册，因此子代理可能比允许清单多出少量工具。
 - 隐藏工具会移除它的 schema 以及作用域感知的提示词段落；纯静态文本的段落仍会留在子代理提示词里。
 - 角色 persona 会替换子代理的部署 persona 前缀；persona 后缀（例如工作目录那一行）保留。
-- `respectModelSelection` 在委派时读取 `subagent-model-selection`，因此设置改动立即生效。
-- 委派工具没有声明 `timeoutMs`，前台委派没有工具级超时；长任务请用 `maxDepth` 与派发提示词约束。
+- `respectModelSelection` 优先使用会话已捕获的策略（与官方委派工具写入的同一个持久 projection），没有捕获时才回退到实时 `subagent-model-selection` 设置——实时设置只用于给新会话播种。因此改动只对**尚未捕获策略**的会话生效。
+- 委派工具默认不声明 `timeoutMs`，前台委派因此可能比发起它的对话活得更久；长任务请用 `timeoutMs`、`maxDepth` 或派发提示词约束。
+- 发现缓存有上限（512 条），因此同一宿主进程里访问过极多不同项目时，会比其他情况更频繁地重新 stat 文件；结果不受影响。
 - 诊断脚本需要 Node.js 22.15 以上（多帧 zstd 解码）；插件本身在 Node.js 20 上运行。
 
 ## 开发
 
 ```sh
-node --test                                    # 单元测试
-node --test --experimental-test-coverage       # 逐文件覆盖率
+npm test                                      # 单元测试（node --test）
+npm run lint                                  # 对 lib/、scripts/、test/ 做 node --check
+node --test --experimental-test-coverage      # 逐文件覆盖率
 ```
 
 运行时在 `lib/`：`roles.js`（发现与解析）、`catalog.js`（目录文本）、`policy.js`（工具策略）、`route.js`（模型路由）、`tool.js`（委派与诊断工具）、`config.js`（行配置）、`index.js`（插件装配）。
 
-CI 在 Node.js 20、22、24 上运行 `npm test`。
+CI 在 Node.js 20、22、24 上运行 `npm run lint` 与 `npm test`。
 
 ### 发版
 

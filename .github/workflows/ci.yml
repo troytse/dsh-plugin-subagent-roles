@@ -21,10 +21,15 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
-      # No lockfile is committed on purpose: the two harness peers are published
+      # No lockfile is committed on purpose: the harness peers are published
       # under the `next` dist-tag, and the ranges in package.json select them.
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+
+      # Cheap and dependency-free: catches a syntax error in a file no test
+      # happens to import (the diagnostic script, for one).
+      - name: Syntax check
+        run: npm run lint
 
       - name: Run tests
         run: npm test

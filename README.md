@@ -67,6 +67,7 @@ The frontmatter is a YAML mapping; the body is the persona.
 | Field | Required | Meaning |
 |---|---|---|
 | `description` | yes | One line shown in the catalog; the delegating agent routes on it. |
+| `name` | no | Must equal the file id when present; a guard against renaming a file without its declaration. |
 | `displayName` | no | Human-readable name; defaults to the id. |
 | `whenToUse` | no | Extra routing hint appended to the catalog line. |
 | `provider`, `model` | no | LLM route for the child. Declare both or neither; omitting them inherits the parent's route. |
@@ -76,7 +77,7 @@ The frontmatter is a YAML mapping; the body is the persona.
 
 `tools` and `toolFilter` are mutually exclusive. Unknown frontmatter keys are rejected rather than ignored, so a typo cannot silently widen a role's tools.
 
-The persona body may reference the prompt variables `{{cwd}}`, `{{model}}`, and `{{provider}}`; they are interpolated by the harness for the child. References are matched exactly (no spaces inside the braces), and the catalog fields — `description`, `displayName`, `whenToUse` — must not contain `{{` at all, because catalog text passes through the same interpolation before it reaches the model.
+The persona body may reference the prompt variables `{{cwd}}`, `{{model}}`, and `{{provider}}` — exactly the three the agent loop registers; they are interpolated by the harness for the child. A deployment that registers more can list them in `personaVariables`; a reference to anything else is rejected when the file is read, because an unknown variable throws on *every* turn of the child that uses it. References are matched exactly (no spaces inside the braces), and the catalog fields — `description`, `displayName`, `whenToUse` — must not contain `{{` at all, because catalog text passes through the same interpolation before it reaches the model.
 
 ## Configuration
 
@@ -102,11 +103,15 @@ The row accepts these options; pass them by overriding the row by id in the prof
 | `catalogScope` | `main` | `main` advertises roles to top-level agents; `all` includes subagents. |
 | `catalogDescriptionMaxLength` | `160` | Per-role description cap in the catalog line. |
 | `projectRootMarkers` | `['.git']` | Markers searched upward from the session working directory. |
+| `projectRootTtlMs` | `5000` | How long a resolved project root is trusted before the tree is re-walked, so a `git init` under a live session is noticed. |
 | `dshHome` | `$DSH_HOME` or `~/.dsh` | Location of the global `roles/` directory. |
-| `maxBodyBytes` | `65536` | Persona size limit, counted in UTF-8 bytes. |
-| `respectModelSelection` | `true` | Honor the official `subagent-model-selection` allow list. |
+| `maxBodyBytes` | `65536` | Persona size limit, counted in UTF-8 bytes. A file larger than this plus 64 KiB of frontmatter is refused before it is read. |
+| `personaVariables` | `['cwd', 'model', 'provider']` | Prompt variables a persona may reference. Extend only for variables the deployment really registers. |
+| `respectModelSelection` | `true` | Honor the official `subagent-model-selection` allow list: a Session's captured policy first, otherwise the live setting. |
 | `onMissingTool` | `drop` | Unavailable tool names: `drop` warns and continues, `error` refuses the delegation. |
-| `enableListTool` | `false` | Register the `subagent_roles` diagnostic tool. |
+| `timeoutMs` | unset | Tool-call deadline for one foreground delegation. Unset leaves it unbounded. |
+| `enableListTool` | `false` | Register the diagnostic tool. |
+| `listToolName` | `subagent_roles` | Name of the diagnostic tool, so a second row can coexist with the first. |
 
 ## Tool policy
 
@@ -135,7 +140,8 @@ The script decodes a session log read-only and prints the system-prompt size, th
 ## How it works
 
 - **Catalog.** One prompt section, rendered per assembly, lists the roles of the assembling agent's workspace: a framing line plus `- <id> (<displayName>): <description>` per role. It renders empty — and costs nothing — when a project has no roles, when the catalog is switched off, when the agent is a subagent, or when the delegation tool is not visible to that agent.
-- **Delegation.** `subagent_role` resolves the role against the delegating agent's working directory, then starts a child through `ctx.subagents` with the role's persona, route, and tool filter. The model-facing wording follows the transport provider: a fork provider already seeds the child with this conversation's completed turns, so the tool says to build on them instead of demanding a fully self-contained prompt.
+- **Delegation.** `subagent_role` resolves the role against the delegating agent's working directory, then starts a child through `ctx.subagents` with the role's persona, route, and tool filter. The model-facing wording follows the transport provider: a fork provider already seeds the child with this conversation's completed turns, so the tool says to build on them instead of demanding a fully self-contained prompt. The route is preflighted through `llm.resolveCallConfig()` before the child exists, so a typo in a role's `model` or `reasoningEffort` is reported to the delegating agent rather than thrown from inside child creation.
+- **Multiple rows.** The catalog section and the diagnostic tool are named after the row (`<toolName>:catalog`, `listToolName`), so a profile can mount a second row for another transport provider (`toolName: subagent_role_fork`) without either registration colliding.
 - **Inheritance.** A child joins its parent's agent preset, so it keeps the parent's prompt and tools except where the role's policy removes them. The role persona shadows the deployment persona prefix for that child only.
 
 ## Limitations
@@ -143,20 +149,22 @@ The script decodes a session log read-only and prints the system-prompt size, th
 - Tools registered into a child's own scope are not affected by a role's tool policy; the core applies restrictions to inherited tools only. The delegation runtime and some tool plugins register per agent, so a child can end up with a small number of tools beyond its allow list.
 - Hiding a tool removes its schema and any scope-aware prompt guidance. Prompt sections with static text stay in the child's prompt.
 - A role persona replaces the deployment persona prefix for the child. The persona suffix, such as the working-directory line, is kept.
-- `respectModelSelection` reads the `subagent-model-selection` section at delegation time, so a settings change applies immediately.
-- The delegation tool declares no `timeoutMs`; a foreground delegation has no tool-level timeout. Bound long runs with `maxDepth` and the dispatch prompt instead.
+- `respectModelSelection` prefers the policy a Session captured (the same durable projection the official delegation tool writes) and falls back to the live `subagent-model-selection` setting, which is what seeds a fresh Session. A change therefore applies to Sessions that have not captured a policy yet.
+- The delegation tool declares no `timeoutMs` unless you set one; an unbounded foreground delegation can outlive the conversation that started it. Bound long runs with `timeoutMs`, `maxDepth`, or the dispatch prompt.
+- Discovery caches are bounded (512 entries), so a very large number of distinct projects in one host process re-stats files more often than it otherwise would. Results are unaffected.
 - The diagnostic script needs Node.js 22.15 or newer for multi-frame zstd decoding; the plugin itself runs on Node.js 20.
 
 ## Development
 
 ```sh
-node --test                                    # unit tests
-node --test --experimental-test-coverage       # per-file coverage
+npm test                                      # unit tests (node --test)
+npm run lint                                  # node --check over lib/, scripts/, test/
+node --test --experimental-test-coverage      # per-file coverage
 ```
 
 The runtime lives in `lib/`: `roles.js` (discovery and parsing), `catalog.js` (catalog text), `policy.js` (tool policies), `route.js` (LLM route), `tool.js` (delegation and diagnostic tools), `config.js` (row options), and `index.js` (plugin wiring).
 
-`npm test` runs the suite on Node.js 20, 22, and 24 in CI.
+CI runs `npm run lint` and `npm test` on Node.js 20, 22, and 24.
 
 ### Releasing
 

@@ -10,3 +10,8 @@ node_modules
 *.log
 .idea/
 .vscode/
+
+# No lockfile is committed on purpose: the harness peers are published under the
+# `next` dist-tag and the ranges in package.json select them (see ci.yml). Ignore
+# it so a local `npm install` cannot become an accidental commit.
+package-lock.json
