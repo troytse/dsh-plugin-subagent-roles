@@ -4,7 +4,29 @@
  */
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { assertDelegationCapabilities, resolveDelegationMode } from '../lib/tool.js'
+import { assertDelegationCapabilities, providerWording, resolveDelegationMode } from '../lib/tool.js'
+
+describe('provider wording', () => {
+  test('a fresh child is told the prompt must be self-contained', () => {
+    const wording = providerWording(false)
+    assert.match(wording.description, /self-contained task/)
+    assert.match(wording.promptDescription, /does not share this conversation's context/)
+  })
+
+  test('a forked child is told the conversation turns are already there', () => {
+    const wording = providerWording(true)
+    assert.match(wording.description, /seeded with this conversation's completed turns/)
+    assert.doesNotMatch(wording.description, /self-contained/)
+    assert.match(wording.promptDescription, /already sees this conversation's completed turns/)
+    assert.doesNotMatch(wording.promptDescription, /does not see this conversation/)
+  })
+
+  test('only an explicit true selects the fork wording', () => {
+    for (const value of [undefined, null, false, 0, '']) {
+      assert.match(providerWording(value).description, /self-contained task/)
+    }
+  })
+})
 
 describe('delegation mode', () => {
   test('one-shot waits by default and backgrounds only when asked', () => {

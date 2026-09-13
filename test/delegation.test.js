@@ -39,6 +39,7 @@ function fakeHost(options = {}) {
   const provider = {
     name: 'spawn',
     capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, ...options.capabilities },
+    ...(options.inheritsParentContext === true ? { inheritsParentContext: true } : {}),
     ...(options.prepareContinuable === false ? {} : { prepareContinuable: () => Promise.resolve({}) }),
   }
   const ctx = {
@@ -231,6 +232,21 @@ describe('subagent_role: route and capability gates', () => {
   })
 })
 
+describe('subagent_role: wording follows the transport provider', () => {
+  test('a fresh provider gets the self-contained wording on the schema', () => {
+    const definition = tool(fakeHost())
+    assert.match(definition.description, /self-contained task/)
+    assert.match(definition.parameters.properties.prompt.description, /does not share this conversation's context/)
+  })
+
+  test('a fork provider gets the inherits-conversation wording on the schema', () => {
+    const definition = tool(fakeHost({ inheritsParentContext: true }))
+    assert.match(definition.description, /seeded with this conversation's completed turns/)
+    assert.doesNotMatch(definition.description, /self-contained/)
+    assert.match(definition.parameters.properties.prompt.description, /already sees this conversation's completed turns/)
+  })
+})
+
 describe('subagent_role: run modes', () => {
   test('the default is a foreground run that settles its result', async () => {
     const host = fakeHost()
@@ -246,6 +262,34 @@ describe('subagent_role: run modes', () => {
       dispose: async () => {},
     })
     await assert.rejects(tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()), /token limit[\s\S]*half done/)
+  })
+
+  test("the provider's own diagnostic reaches the delegating agent", async () => {
+    const host = fakeHost()
+    host.ctx.subagents.start = async () => ({
+      id: 'child-3',
+      result: Promise.resolve({
+        stopReason: 'error',
+        diagnostic: 'adapter refused: context window exceeded',
+        output: [{ type: 'text', text: 'partial answer' }],
+      }),
+      dispose: async () => {},
+    })
+    await assert.rejects(
+      tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()),
+      /subagent run failed[\s\S]*Diagnostic: adapter refused: context window exceeded[\s\S]*partial answer/,
+    )
+  })
+
+  test('a completed run is unaffected by the diagnostic path', async () => {
+    const host = fakeHost()
+    host.ctx.subagents.start = async () => ({
+      id: 'child-4',
+      result: Promise.resolve({ stopReason: 'completed', diagnostic: 'noise', output: [{ type: 'text', text: 'ok' }] }),
+      dispose: async () => {},
+    })
+    const value = await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.deepEqual(value, { kind: 'foreground', runId: 'child-4', output: [{ type: 'text', text: 'ok' }] })
   })
 
   test('every non-completed stop reason becomes an actionable error', async () => {

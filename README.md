@@ -135,7 +135,7 @@ The script decodes a session log read-only and prints the system-prompt size, th
 ## How it works
 
 - **Catalog.** One prompt section, rendered per assembly, lists the roles of the assembling agent's workspace: a framing line plus `- <id> (<displayName>): <description>` per role. It renders empty — and costs nothing — when a project has no roles, when the catalog is switched off, when the agent is a subagent, or when the delegation tool is not visible to that agent.
-- **Delegation.** `subagent_role` resolves the role against the delegating agent's working directory, then starts a child through `ctx.subagents` with the role's persona, route, and tool filter.
+- **Delegation.** `subagent_role` resolves the role against the delegating agent's working directory, then starts a child through `ctx.subagents` with the role's persona, route, and tool filter. The model-facing wording follows the transport provider: a fork provider already seeds the child with this conversation's completed turns, so the tool says to build on them instead of demanding a fully self-contained prompt.
 - **Inheritance.** A child joins its parent's agent preset, so it keeps the parent's prompt and tools except where the role's policy removes them. The role persona shadows the deployment persona prefix for that child only.
 
 ## Limitations
