@@ -4,6 +4,7 @@
  * malformed-document branches of role parsing.
  */
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -221,5 +222,65 @@ describe('malformed role documents', () => {
     assert.deepEqual(roles, [])
     assert.equal(diagnostics.length, 1)
     assert.match(diagnostics[0].reason, /cannot stat role file/)
+  })
+
+  test('a role file that is a symlink to a FIFO is refused instead of hanging', () => {
+    // readFileSync on a FIFO blocks until a writer appears — synchronously, inside
+    // prompt assembly, with no timeout that can break it. The type guard is the
+    // only thing standing between a cloned repository and a frozen host.
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    const fifo = join(sandbox(), 'pipe')
+    try {
+      execFileSync('mkfifo', [fifo])
+    } catch {
+      return // no mkfifo here; the directory case below covers the same guard
+    }
+    symlinkSync(fifo, join(project, '.dsh', 'roles', 'hang.md'))
+    const loader = createRoleLoader({ dshHome: sandbox() })
+    const { roles, diagnostics } = loader.loadSync(project)
+    assert.deepEqual(roles, [])
+    assert.equal(diagnostics.length, 1)
+    assert.match(diagnostics[0].reason, /not a regular file/)
+  })
+
+  test('a role path that resolves to a directory is refused by type', () => {
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles', 'inner.md'), { recursive: true })
+    symlinkSync(join(project, '.dsh', 'roles', 'inner.md'), join(project, '.dsh', 'roles', 'link.md'))
+    const loader = createRoleLoader({ dshHome: sandbox() })
+    const { roles, diagnostics } = loader.loadSync(project)
+    // The real directory is not listed; only the symlink is, and it is refused.
+    assert.deepEqual(roles, [])
+    assert.equal(diagnostics.length, 1)
+    assert.match(diagnostics[0].reason, /not a regular file \(directory\)/)
+  })
+
+  test('an oversized role file is refused before it is read', () => {
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'huge.md'), `---\ndescription: d\n---\n${'A'.repeat(1024 * 1024)}`)
+    const loader = createRoleLoader({ dshHome: sandbox(), maxBodyBytes: 64 })
+    const { roles, diagnostics } = loader.loadSync(project)
+    assert.deepEqual(roles, [])
+    assert.equal(diagnostics.length, 1)
+    assert.match(diagnostics[0].reason, /role file is \d+ bytes, over the 64-byte persona limit/)
+    // A size diagnostic, NOT a parsed-body one: the file never reached the reader.
+    assert.doesNotMatch(diagnostics[0].reason, /persona body is/)
+  })
+
+  test('a large frontmatter still fits inside the read allowance', () => {
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    const padding = Array.from({ length: 400 }, (_, index) => `# ${index} ${'x'.repeat(60)}`).join('\n')
+    writeFileSync(join(project, '.dsh', 'roles', 'ok.md'), `---\ndescription: d\n---\n${padding}`)
+    const loader = createRoleLoader({ dshHome: sandbox(), maxBodyBytes: 1024 * 1024 })
+    const { roles, diagnostics } = loader.loadSync(project)
+    assert.deepEqual(diagnostics, [])
+    assert.equal(roles.length, 1)
   })
 })
