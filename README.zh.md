@@ -3,6 +3,7 @@
 [English](README.md) | 中文
 
 [![npm](https://img.shields.io/npm/v/dsh-plugin-subagent-roles)](https://www.npmjs.com/package/dsh-plugin-subagent-roles)
+[![CI](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## 概述
@@ -154,6 +155,12 @@ node --test --experimental-test-coverage       # 逐文件覆盖率
 ```
 
 运行时在 `lib/`：`roles.js`（发现与解析）、`catalog.js`（目录文本）、`policy.js`（工具策略）、`route.js`（模型路由）、`tool.js`（委派与诊断工具）、`config.js`（行配置）、`index.js`（插件装配）。
+
+CI 在 Node.js 20、22、24 上运行 `npm test`。
+
+### 发版
+
+`npm version <patch|minor|major>` 会提交版本号变更并打 tag，推送提交与 tag 后，`.github/workflows/publish.yml` 会跑测试、校验 tag 与 `package.json` 版本一致，再通过 npm trusted publishing（OIDC）发布并附带 provenance 证明，因此仓库里不保存任何长期 token。首次自动发版前，需要先在 npm 的包设置页把 `publish.yml` 登记为 trusted publisher。
 
 ## 许可
 

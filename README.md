@@ -3,6 +3,7 @@
 English | [中文](README.zh.md)
 
 [![npm](https://img.shields.io/npm/v/dsh-plugin-subagent-roles)](https://www.npmjs.com/package/dsh-plugin-subagent-roles)
+[![CI](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml/badge.svg)](https://github.com/troytse/dsh-plugin-subagent-roles/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Summary
@@ -154,6 +155,12 @@ node --test --experimental-test-coverage       # per-file coverage
 ```
 
 The runtime lives in `lib/`: `roles.js` (discovery and parsing), `catalog.js` (catalog text), `policy.js` (tool policies), `route.js` (LLM route), `tool.js` (delegation and diagnostic tools), `config.js` (row options), and `index.js` (plugin wiring).
+
+`npm test` runs the suite on Node.js 20, 22, and 24 in CI.
+
+### Releasing
+
+`npm version <patch|minor|major>` commits the bump and creates the tag; push the commit and the tag. `.github/workflows/publish.yml` then runs the tests, checks that the tag matches `package.json`, and publishes through npm trusted publishing (OIDC) with a provenance attestation, so no long-lived token is stored in the repository. Register `publish.yml` as a trusted publisher on the package's npm settings page before the first automated release.
 
 ## License
 
