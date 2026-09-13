@@ -132,8 +132,7 @@ const systemText = system === undefined ? undefined : textOf(system.data?.messag
 if (systemText !== undefined) {
   console.log(`system prompt: ${systemText.length} chars`)
   const catalog = systemText.includes('Roles come from role files')
-  console.log(`role catalog : ${catalog ? 'present (new plugin)' : 'absent'}`)
-  if (systemText.includes('Subagent Director roles')) console.log('WARNING      : legacy Subagent Director section still present')
+  console.log(`role catalog : ${catalog ? 'present' : 'absent'}`)
   const grepFlag = argv.indexOf('--grep')
   if (grepFlag >= 0) {
     const needle = argv[grepFlag + 1]
@@ -157,10 +156,9 @@ if (argv.includes('--all')) {
 const role = tools.find((tool) => tool.name === 'subagent_role')
 if (role !== undefined) {
   const owner = String(role.description).startsWith('Delegate a self-contained task to a role defined by a role file')
-    ? 'subagent-roles (new)'
-    : 'subagent-director (old)'
-  console.log(`subagent_role: ${JSON.stringify(role).length} chars — owner: ${owner}`)
+    ? 'this plugin'
+    : 'another registration of the same name'
+  console.log(`subagent_role: ${JSON.stringify(role).length} chars — ${owner}`)
 }
-console.log(`close_subagent: ${tools.some((tool) => tool.name === 'close_subagent') ? 'present (old plugin)' : 'absent'}`)
 console.log('largest tools:')
 for (const entry of sizes.slice(0, 8)) console.log(`  ${String(entry.chars).padStart(6)}  ${entry.name}`)

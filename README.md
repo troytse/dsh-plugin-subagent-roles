@@ -2,13 +2,9 @@
 
 文件定义的子代理角色（subagent roles）：角色写在 **`.dsh/roles/<id>.md`** 里，项目级与全局级两层解析；委派方上下文里只多一行紧凑目录；角色的 persona 与工具策略**真实**作用于子代理。
 
-它是 `dsh-plugin-subagent-director` 的替代实现，修掉后者的三个问题：
-
-| 旧插件 | 本插件 |
-|---|---|
-| 角色只能写在全局 `settings.yaml` 的 `subagent-director` 命名空间 | 角色是文件：`<项目根>/.dsh/roles/`（项目级）与 `~/.dsh/roles/`（全局级） |
-| 系统提示强制注入全部角色描述，无法关闭 | 只注入一行紧凑目录（id + 显示名 + 截断描述）；无角色时为**空**，可用 `catalog: off` 关闭；子代理默认不收 |
-| 工具过滤"看不见效果" | 原生 `tools.restrict` + 通配符展开 + 缺名降级 + 诊断工具，`request/header.tools` 可直接核对 |
+- **角色即文件**：`<项目根>/.dsh/roles/<id>.md`（项目级）与 `~/.dsh/roles/<id>.md`（全局级），同 id 项目级胜出，改文件即生效。
+- **上下文可控**：委派方只看到一行 `id (显示名): 描述`；persona 只进子代理；没有角色的项目里增量**为零**；`catalog: off` 可整体关闭。
+- **过滤真实生效**：`tools` 白名单/黑名单 + 通配符展开，交给核心 `tools.restrict`；被隐藏的工具连 schema 带提示词段落一起消失，可用会话日志的 `request/header.tools` 直接核对。
 
 ## 安装
 
@@ -135,18 +131,17 @@ tools: [bash, read, grep, glob, read_image, 'mcp__demo__*']   # 支持通配符
 4. **`maxDepth: 0` 等于禁止委派**：子代理深度从 1 起算，任何委派都会被核心以 `SubagentDepthError` 拒绝（配置层允许该值，属显式意图）。
 5. **模型白名单读的是实时 settings**：`subagent-model-selection` 一旦改动，本插件立刻按新清单裁决；官方 `subagent` 工具读的是会话捕获的策略，两者在会话中途改设置时可能短暂不一致。
 
-## 与旧插件的关系 / 不做什么
+## 不提供什么
 
-- 不提供设置面板，也不注册 `settings` 命名空间：角色的唯一真相是文件。
-- 不提供 `/orchestrate` 命令、`close_subagent` 工具（旧插件自带、实测零调用）。
-- 不修改也不禁用官方的 `subagent` / `subagent_fork` / `send_message` / `interrupt_agent` / `list_agents`；角色目录里的那行说明只是引导模型优先用 `subagent_role`。
-- 子代理仍然继承父 preset 的系统提示（这是框架行为）；本插件能做的是把它的工具目录与角色 persona 精确化。
+- **不提供设置面板，也不注册 `settings` 命名空间**：角色的唯一真相是 `.dsh/roles/*.md` 文件。
+- **不提供额外工具**：只有一个委派工具 `subagent_role`（名字可配）与可选的只读诊断工具 `subagent_roles`；没有命令、没有后台控制类工具。
+- **不改动框架自带工具**：`subagent` / `subagent_fork` / `send_message` / `interrupt_agent` / `list_agents` 原样保留；目录里那行说明只是引导模型优先用 `subagent_role`。
+- **不改变子代理继承父 preset 提示词这一框架行为**：本插件能做的是把它的工具目录与角色 persona 精确化。
 
 ## 开发
 
 ```bash
 node --test                                                     # 84 个单元测试：解析、优先级、工具策略展开、目录渲染、路由、委派模式、挂载
-node scripts/inspect-session-budget.mjs --project <项目目录>      # 打印某会话的 system+tools 体积与 subagent_role 归属
+node scripts/inspect-session-budget.mjs --project <项目目录>      # 打印某会话的 system+tools 体积与本插件工具的归属
 node scripts/inspect-session-budget.mjs <会话目录> --all --grep <文本>   # 列出全部工具名 / 在 system prompt 里查找文本
-node scripts/migrate-roles.mjs --project <项目目录> [--dry-run]   # 一次性：把旧 settings 命名空间里的角色迁成 .dsh/roles 文件
 ```

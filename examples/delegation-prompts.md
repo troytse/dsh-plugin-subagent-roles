@@ -55,29 +55,3 @@
 
 【回报】1 做了什么（以「工具名 + 目标路径」开头） 2 观察结果（用例名 + passed/failed + 映射表逐项覆盖结论） 3 问题与建议 4 状态：DONE 或 WAITING
 ```
-
----
-
-## 2. AGENTS.md 里两处需要更新的表述
-
-改角色/prompt 时顺手改掉即可（这两处文本与迁移后的实现不符）：
-
-**(1) 第 245 行**，现在写：
-
-> 系统提示中的角色目录段（Subagent Director roles / 另一角色描述）与操作员无关，可要求其忽略。
-
-建议改为：
-
-> 操作员子代理默认**不会**收到角色目录（`catalogScope: main`），无需再要求它忽略；若某次仍出现角色目录段，可忽略。
-
-**(2) 第 250 行**，现在写：
-
-> （角色 persona v6 已内置该口径，改角色需重启 `dsh web` 生效）
-
-建议改为：
-
-> （角色 persona 已内置该口径；角色定义在 `.dsh/roles/<id>.md`，改文件即生效，**不需要重启 `dsh web`**——只有改插件代码或 profile 组合才需要重启）
-
-**(3) 建议新增一段（放在「调试验证委派」开头）**：
-
-> 角色由项目文件定义：`.dsh/roles/web-operator.md`（frontmatter：`provider`/`model`/`reasoningEffort`/`tools`；正文：persona）。工具策略是**白名单**：未列出的工具对子代理不可见且不可调（含 `write`/`edit` 与委派类工具）。同一个 id 同时存在于项目级与全局级（`~/.dsh/roles/`）时，项目级胜出。SOP 文件在 `.dsh/skills/`，标了 `disable-model-invocation`，**子代理要用 `read` 直接读 SKILL.md**（`skill` 工具对它不可用）——所以派发 prompt 里必须写明 SOP 路径。
