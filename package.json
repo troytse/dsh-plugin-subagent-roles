@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-subagent-roles",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "File-defined subagent roles for DeepSeek Harness: project (.dsh/roles) and global (~/.dsh/roles) role files, a compact role catalog, and real per-role tool filtering.",
   "type": "module",
   "main": "lib/index.js",
