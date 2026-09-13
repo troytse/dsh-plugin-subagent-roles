@@ -4,6 +4,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] - 2026-09-13
+
+本次为**文档与基建补丁**，不含运行期行为变更。
+
+### 其他
+
+- 新增本文件（`CHANGELOG.md`，中文），追溯 0.1.0 以来的全部版本，并纳入 `files` 随包发布。
+- 发版工作流增加门禁：`CHANGELOG.md` 中没有 `## [<版本号>]` 条目即拒绝发布。发出去就收不回来，所以更新日志条目是发布的前置条件，而不是约定。
+- 两份 README 的发版段落改写为三步（先补日志 → 再 `npm version` 推标签 → 工作流校验后发布），并互加更新日志入口。
+
 ## [0.2.0] - 2026-09-13
 
 ### 新增
@@ -67,6 +77,7 @@
 - 逐角色模型路由，遵守官方 `subagent-model-selection` 授权清单。
 - 可选诊断工具 `subagent_roles`；诊断脚本 `scripts/inspect-session-budget.mjs`。
 
+[0.2.1]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.1.0...v0.1.1
