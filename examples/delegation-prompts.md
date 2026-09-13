@@ -1,56 +1,58 @@
-# 角色委派 prompt 模板（web 验证者）
+# Role delegation prompts (web verifier)
 
-> 这是**模板**，尖括号处按你自己的项目替换。角色定义在 `<项目根>/.dsh/roles/<id>.md`
-> （frontmatter 是 `provider`/`model`/`reasoningEffort`/`tools`，正文是 persona）。
-> 角色文件改动**不需要重启 `dsh web`**（每次提示词组装按 mtime 读取）。
+English | [中文](delegation-prompts.zh.md)
 
----
-
-## 0. 主代理侧（你在项目会话里说的话）
-
-**自然触发**（主代理会照角色目录自己选角色）：
-
-```text
-用 web-verifier 验证「<页面/功能>」这次改动，跑 <你的 E2E 命令>，按 <你的验证 SOP> 的全覆盖口径给我结论；你不要自己跑浏览器。
-```
-
-**想同时明确边界时**加一句：
-
-```text
-验证者只做验证、不改文件、不碰后端；服务如果要重启由你（主代理）先做。
-```
+> This is a template: replace the angle-bracket placeholders with your own values.
+> Roles are defined in `<project>/.dsh/roles/<id>.md` (frontmatter: `provider` / `model` / `reasoningEffort` / `tools`; body: persona).
+> Editing a role file takes effect immediately — no `dsh web` restart.
 
 ---
 
-## 1. web-verifier 派发模板（主代理 → 子代理）
+## 0. What you say to the main agent
+
+**Natural trigger** — the main agent picks the role from the catalog itself:
 
 ```text
-【唯一任务】用真实浏览器验证 <页面/功能> 的这次改动是否可用，并给出全覆盖结论。
+Use web-verifier to verify the changes to "<page/feature>": run <your E2E command> and report against the full-coverage criteria in <your verification SOP>. Do not drive the browser yourself.
+```
 
-【目标】
-- 项目根：<项目根>
-- 前端目录：<前端目录>（dev 地址 <dev 地址>）
-- 后端：<后端地址>（你只读观察，不启停）
-- 验证 SOP（先读）：<项目根>/.dsh/skills/<你的验证技能>/SKILL.md
+**Add boundaries when they matter:**
 
-【步骤】
-1. 若项目对共享资源（dev server、设备等）有租约/互斥约定：先按约定取锁并在每步刷新心跳，任务结束立即释放；只读探活不需要锁。
-2. 先读项目说明（AGENTS.md 之类）与上面的 SOP，确认服务状态：<状态检查命令>。
-3. 跑用例：cd <前端目录> && <E2E 命令>；账号见项目说明。
-4. 若 SOP 要求「功能清单 → 用例」映射表：先补齐再跑，逐项覆盖页面内每个可交互控件（搜索/筛选/重置、每个行操作、弹层与抽屉内每个控件）。
-5. 浏览器 console 断言：出现 [Global Error] / 未捕获异常即判失败；限流类噪声（如 429）可过滤，但若影响断言须如实回报。
-6. 若项目支持多语言：用真实控件切换语言，断言界面文案随之变化，再切回。
+```text
+The verifier only verifies: it does not modify files and does not touch the backend. If a service needs a restart, you (the main agent) do that first.
+```
 
-【验收】
-- <E2E 命令> 的结果 + 按项目口径的**逐项**覆盖结论（覆盖/未覆盖）
-- 覆盖不到的控件必须单列「未覆盖清单」并置 WAITING，不得以「N passed」收尾
-- 失败时附上可复现的 DOM/日志/截图或 trace 路径
+---
 
-【禁止】
-- 修改任何项目文件（edit/write/落盘全禁；仅租约协议自身的取锁目录例外）
-- 启停/重启后端、跑迁移或重置数据库、直接读写数据库、用 curl/API 造数
-- 另起 dev server 或改端口；不要绕过项目的启动脚本自己拉起服务
-- 调用与本任务无关的工具（其它 MCP 工具、委派类工具等）
+## 1. Dispatch template (main agent → subagent)
 
-【回报】1 做了什么（以「工具名 + 目标路径」开头） 2 观察结果（用例名 + passed/failed + 覆盖结论） 3 问题与建议 4 状态：DONE 或 WAITING
+```text
+TASK — state it first: verify with a real browser that <page/feature> still works, and report full coverage.
+
+TARGET
+- Project root: <project root>
+- Frontend directory: <frontend directory> (dev URL <dev URL>)
+- Backend: <backend URL> — read-only for you; do not start or stop it
+- Verification SOP (read it first): <project root>/.dsh/skills/<your verification skill>/SKILL.md
+
+STEPS
+1. If the project has a lease or mutex convention for shared resources (dev servers, devices): take the lock, refresh its heartbeat after every step, and release it when done. Read-only probes need no lock.
+2. Read the project's own instructions (AGENTS.md and friends) and the SOP above, then confirm service state: <status command>.
+3. Run the cases: cd <frontend directory> && <E2E command>. Credentials come from the project docs.
+4. If the SOP asks for a "feature list → test cases" mapping table, complete it before running, and cover every interactive control on the page: search, filter and reset, every row action, and every control inside drawers and dialogs.
+5. Console guard: a [Global Error] or an uncaught exception fails the run. Rate-limit noise (for example 429) may be filtered, but report it when it affects an assertion.
+6. If the project is localized: switch language with the real control, assert that the interface text changes, then switch back.
+
+ACCEPTANCE
+- The result of <E2E command>, plus a per-item coverage verdict (covered / not covered) in the project's own terms.
+- Anything you could not cover must be listed as an explicit "not covered" item with status WAITING; "N passed" on its own is not acceptance.
+- On failure, attach reproducible evidence: DOM state, logs, screenshots, or a trace path.
+
+FORBIDDEN
+- Modifying any project file — edit/write and shell redirection are out; only the lease directory may be created.
+- Starting or stopping the backend, running migrations or database resets, reading or writing the database, seeding data through curl or API calls.
+- Starting another dev server or changing ports; do not bypass the project's own start script.
+- Calling tools unrelated to the task (other MCP tools, delegation tools, and so on).
+
+REPORT: 1 what you did (start with the tool name and the target path) 2 what you observed (case names, pass/fail, coverage verdict) 3 problems and suggestions 4 status: DONE or WAITING
 ```

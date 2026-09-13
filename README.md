@@ -46,7 +46,7 @@ Then ask the agent to delegate — “have the code-reviewer role review this di
 subagent_role({ role: "code-reviewer", prompt: "Review the staged diff.", description: "review staged diff" })
 ```
 
-Roles are read when the prompt is assembled and again when a delegation starts, so editing a role file takes effect without restarting DSH. `examples/delegation-prompts.md` has dispatch prompts in the same style.
+Roles are read when the prompt is assembled and again when a delegation starts, so editing a role file takes effect without restarting DSH. `examples/delegation-prompts.md` has dispatch prompts in the same style ([中文](examples/delegation-prompts.zh.md)).
 
 ## Role files
 

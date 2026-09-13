@@ -46,7 +46,7 @@ tools: [read, grep, glob]
 subagent_role({ role: "code-reviewer", prompt: "审查已暂存的改动。", description: "审查暂存改动" })
 ```
 
-角色在组装提示词时读取、在委派开始时再读取一次，因此改角色文件**不需要重启 DSH**。同风格的派发提示词见 `examples/delegation-prompts.md`。
+角色在组装提示词时读取、在委派开始时再读取一次，因此改角色文件**不需要重启 DSH**。同风格的派发提示词见 `examples/delegation-prompts.zh.md`。
 
 ## 角色文件
 
