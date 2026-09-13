@@ -30,29 +30,50 @@ function stubHost(options = {}) {
     capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
     prepareContinuable: () => Promise.resolve({}),
   }
+  const errors = []
+  const handlers = new Map()
   const ctx = {
-    logger: { info() {}, warn: (message) => warnings.push(String(message)), debug() {} },
-    on: () => () => {},
+    logger: {
+      info() {},
+      debug() {},
+      warn: (message) => warnings.push(String(message)),
+      error: (message) => errors.push(String(message)),
+    },
+    on: (name, handler) => {
+      const list = handlers.get(name) ?? []
+      list.push(handler)
+      handlers.set(name, list)
+      return () => {}
+    },
     effect: (callback) => callback(),
-    get: (name) => (name === 'systemPrompt' ? systemPrompt : undefined),
+    get: (name) => (name === 'systemPrompt' ? (options.noSystemPrompt === true ? undefined : systemPrompt) : undefined),
     tools: {
       register: (definition) => {
         registered.push(definition)
-        return () => {}
+        return () => {
+          const at = registered.indexOf(definition)
+          if (at >= 0) registered.splice(at, 1)
+        }
       },
       get: (name) => registered.find((definition) => definition.name === name),
       schemas: () => options.schemas ?? [],
     },
-    subagents: { getProvider: (name) => (name === provider.name ? provider : undefined) },
+    subagents: {
+      getProvider: (name) => (options.noProvider === true || name !== provider.name ? undefined : provider),
+    },
   }
   const systemPrompt = {
     section: (definition) => {
+      if (options.sectionThrows === true) throw new Error('section registry is closed')
       sections.push(definition)
       return () => {}
     },
     getSectionOrder: (key) => (key === 'TOOL_SUBAGENT' ? 2800 : 0),
   }
-  return { ctx, warnings, registered, sections, provider }
+  const emit = (name, payload) => {
+    for (const handler of handlers.get(name) ?? []) handler(payload)
+  }
+  return { ctx, warnings, errors, registered, sections, provider, handlers, emit }
 }
 
 function agentAt(cwd, depth = 0) {
@@ -135,6 +156,45 @@ describe('plugin wiring', () => {
     assert.match(text, /web-verifier/)
     assert.equal(text.includes('broken'), false)
     assert.equal(host.warnings.some((message) => message.includes('broken.md')), true)
+  })
+
+  test('a provider that appears later is mounted, and its removal unwinds the tool', () => {
+    const host = stubHost({ noProvider: true })
+    apply(host.ctx, new Config({}))
+    assert.deepEqual(host.registered, [])
+    host.emit('subagent/provider-added', host.provider)
+    assert.deepEqual(host.registered.map((definition) => definition.name), ['subagent_role'])
+    // A second add for the same provider must not double-register.
+    host.emit('subagent/provider-added', host.provider)
+    assert.equal(host.registered.length, 1)
+    host.emit('subagent/provider-removed', 'spawn')
+    assert.deepEqual(host.registered, [])
+    // …and it can come back.
+    host.emit('subagent/provider-added', host.provider)
+    assert.equal(host.registered.length, 1)
+  })
+
+  test('events for another transport provider and an unknown removal are ignored', () => {
+    const host = stubHost()
+    apply(host.ctx, new Config({}))
+    const before = host.registered.length
+    host.emit('subagent/provider-added', { name: 'fork', capabilities: {}, prepareContinuable: () => {} })
+    host.emit('subagent/provider-removed', 'fork')
+    assert.equal(host.registered.length, before)
+  })
+
+  test('a missing systemPrompt service warns instead of failing silently', () => {
+    const host = stubHost({ noSystemPrompt: true })
+    apply(host.ctx, new Config({}))
+    assert.deepEqual(host.registered.map((definition) => definition.name), ['subagent_role'])
+    assert.match(host.warnings.join('\n'), /no systemPrompt service/)
+  })
+
+  test('a failing prompt registration is logged and does not break the tool', () => {
+    const host = stubHost({ sectionThrows: true })
+    apply(host.ctx, new Config({}))
+    assert.match(host.errors.join('\n'), /role catalog section failed/)
+    assert.deepEqual(host.registered.map((definition) => definition.name), ['subagent_role'])
   })
 
   test('the section survives a discovery error', () => {

@@ -9,6 +9,9 @@
  *
  * `--project` picks the newest session directory under
  * ~/.dsh/sessions/<slug-of-project-dir>/.
+ *
+ * Read-only: it never writes. Requires Node >= 22.15 for the multi-frame zstd
+ * decoder (`node:zlib` gained zstd around then); the plugin itself needs >= 20.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'

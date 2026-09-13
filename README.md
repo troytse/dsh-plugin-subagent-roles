@@ -105,7 +105,7 @@ tools: [read, grep, glob]           # 白名单；支持通配符如 'mcp__demo_
 
 实测（真实会话，standard preset）：父级 71 个工具 / 51,810 字符；本插件把**子代理**从"继承全部"降到"只拿角色需要的"——一个 `bash, read, grep, glob, read_image, todo_write, skill` 白名单的角色，子代理实测 **9 个工具 / 11,015 字符**（含 2 个无法被过滤的框架自留工具，见「已知边界」）。
 
-插件自身在**主代理**目录里的开销：`subagent_role` 1,074 字符 + 角色目录段（每个角色一行，两个角色时 418 字符，无角色时为 0）。调小 `catalogDescriptionMaxLength`（下限 16）、精简 `tools` 是最直接的两个旋钮。
+插件自身在**主代理**目录里的开销：`subagent_role` 1,074 字符 + 角色目录段（每角色一行；实测两个角色共 450 字符，无角色时为 0）。调小 `catalogDescriptionMaxLength`（下限 16）、精简 `tools` 是最直接的两个旋钮。
 
 ## 诊断
 
@@ -141,7 +141,8 @@ tools: [read, grep, glob]           # 白名单；支持通配符如 'mcp__demo_
 ## 开发
 
 ```bash
-node --test                                                     # 84 个单元测试：解析、优先级、工具策略展开、目录渲染、路由、委派模式、挂载
+node --test                                                     # 140 个单元测试：解析/优先级/工具策略/目录/路由/委派编排/挂载生命周期
+node --test --experimental-test-coverage                        # 覆盖率（lib 各模块 99–100%，整体约 96%）
 node scripts/inspect-session-budget.mjs --project <项目目录>      # 打印某会话的 system+tools 体积与本插件工具的归属
 node scripts/inspect-session-budget.mjs <会话目录> --all --grep <文本>   # 列出全部工具名 / 在 system prompt 里查找文本
 ```
