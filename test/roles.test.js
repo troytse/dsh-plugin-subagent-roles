@@ -329,3 +329,68 @@ describe('role loader', () => {
     assert.match(error, /60 bytes, over the 30-byte limit/)
   })
 })
+
+describe('persona variables', () => {
+  test('a configured variable is accepted while an unknown one is still refused', () => {
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'known.md'), '---\ndescription: d\n---\nhello {{agent_name}}')
+    writeFileSync(join(project, '.dsh', 'roles', 'unknown.md'), '---\ndescription: d\n---\nhello {{nope}}')
+
+    // The stock deployment registers only cwd/model/provider.
+    const stock = createRoleLoader({ dshHome: sandbox() })
+    assert.deepEqual(stock.loadSync(project).roles, [])
+    assert.equal(stock.loadSync(project).diagnostics.length, 2)
+
+    const extended = createRoleLoader({ dshHome: sandbox(), personaVariables: ['cwd', 'model', 'provider', 'agent_name'] })
+    const { roles, diagnostics } = extended.loadSync(project)
+    assert.deepEqual(roles.map((role) => role.id), ['known'])
+    assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.id), ['unknown'])
+  })
+
+  test('a name the core would reject cannot be smuggled in through config', () => {
+    const { error } = parseRoleDocument('worker', '---\ndescription: d\n---\n{{bad-name}}', { personaVariables: ['bad-name'] })
+    assert.match(error, /persona references \{\{bad-name\}\}/)
+  })
+
+  test('the refusal lists the CONFIGURED variables, not the defaults', () => {
+    const { error } = parseRoleDocument('worker', '---\ndescription: d\n---\n{{nope}}', { personaVariables: ['cwd', 'agent_name'] })
+    assert.match(error, /only \{\{cwd\}\}, \{\{agent_name\}\} are available/)
+  })
+
+  test('findUnsupportedPersonaVariable defaults to the shipped three', () => {
+    assert.equal(findUnsupportedPersonaVariable('{{cwd}} {{model}} {{provider}}'), undefined)
+    assert.equal(findUnsupportedPersonaVariable('{{agent_name}}'), 'agent_name')
+    assert.equal(findUnsupportedPersonaVariable('{{agent_name}}', ['agent_name']), undefined)
+  })
+})
+
+describe('bounded discovery caches', () => {
+  test('a one-entry cache still returns the right roles for every project', () => {
+    const projectA = sandbox()
+    const projectB = sandbox()
+    for (const [project, id] of [[projectA, 'alpha'], [projectB, 'beta']]) {
+      mkdirSync(join(project, '.git'), { recursive: true })
+      mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+      writeFileSync(join(project, '.dsh', 'roles', `${id}.md`), '---\ndescription: d\n---\nbody')
+    }
+    // One entry per cache: every second read is a miss, so eviction runs on
+    // every step and a wrong eviction would surface as a wrong role set.
+    const loader = createRoleLoader({ dshHome: sandbox(), cacheEntries: 1 })
+    for (let round = 0; round < 5; round += 1) {
+      assert.deepEqual(loader.loadSync(projectA).roles.map((role) => role.id), ['alpha'])
+      assert.deepEqual(loader.loadSync(projectB).roles.map((role) => role.id), ['beta'])
+    }
+  })
+
+  test('eviction does not resurface a diagnostic that was already reported', () => {
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'bad.md'), '---\nmodel: x\n---\nbody')
+    const loader = createRoleLoader({ dshHome: sandbox(), cacheEntries: 512 })
+    assert.equal(loader.loadSync(project, { freshDiagnostics: true }).diagnostics.length, 1)
+    assert.equal(loader.loadSync(project, { freshDiagnostics: true }).diagnostics.length, 0)
+  })
+})
