@@ -33,27 +33,18 @@ const ROLES_DIR = join(PROJECT, '.dsh', 'roles')
 const MARKET = join(DSH_HOME, 'profiles', 'web', '.dsh-market', 'discovery-compatibility-v1.json')
 const RETIRED = 'dsh-plugin-subagent-director'
 
-const COMMON_TOOLS = ['bash', 'read', 'grep', 'glob', 'read_image', 'todo_write', 'skill']
-const WECHAT_TOOLS = [
-  'mcp__haymony__wechat_project_info',
-  'mcp__haymony__wechat_page_list',
-  'mcp__haymony__wechat_open_project',
-  'mcp__haymony__wechat_close_project',
-  'mcp__haymony__wechat_automation_start',
-  'mcp__haymony__wechat_runtime_diagnose',
-  'mcp__haymony__wechat_self_test',
-  'mcp__haymony__wechat_ready_check',
-  'mcp__haymony__wechat_diagnose',
-  'mcp__haymony__wechat_build_npm',
-  'mcp__haymony__wechat_config_validate',
-  'mcp__haymony__wechat_dependency_check',
-  'mcp__haymony__wechat_cache_clean',
-  'mcp__haymony__wechat_reset_fileutils',
-]
-const DESCRIPTIONS = {
-  'web-operator': '浏览器/Web 端（管理后台、后端服务、网页应用）的调试与验证执行者：浏览器 E2E、前端 dev/build、服务启停与状态、页面/日志/截图验证。这类验证交给本角色执行，主代理不要亲自做。',
-  'mp-operator': '微信小程序构建诊断与 UI 验证执行者：DevTools 编译诊断、页面与组件 UI 验证、UI 自动化、运行时探针、截图回报。这类 DevTools 操作交给本角色执行，主代理不要亲自做。',
-}
+/**
+ * Tool policy written for a migrated role. Start from the role's OWN
+ * `toolFilter.allow` in settings when it has one (that is the author's intent);
+ * otherwise review this default before running.
+ */
+const FALLBACK_TOOLS = ['bash', 'read', 'grep', 'glob', 'read_image', 'todo_write', 'skill']
+/**
+ * Description overrides for the catalog line. Add one entry per role whose old
+ * description is too long or no longer accurate; roles without an entry keep
+ * the description they already had in settings.
+ */
+const DESCRIPTIONS = {}
 const NOISE_BULLET = /^\s*-\s*系统提示中「Subagent Director roles/
 
 /** Quote one YAML scalar compactly (double-quoted, so CJK and `*` survive). */
@@ -74,18 +65,21 @@ const section = settings?.['subagent-director']
 if (section === null || typeof section !== 'object') throw new Error('settings.yaml has no `subagent-director` section; nothing to migrate')
 const roles = section.roles ?? {}
 const ids = Object.keys(roles).sort()
-if (ids.join(',') !== 'mp-operator,web-operator') throw new Error(`unexpected role set in settings: ${ids.join(', ')}`)
+if (ids.length === 0) throw new Error('the `subagent-director` section defines no roles; nothing to migrate')
 
 if (!DRY_RUN) mkdirSync(ROLES_DIR, { recursive: true })
 const written = []
-for (const roleId of ['web-operator', 'mp-operator']) {
+for (const roleId of ids) {
   const role = roles[roleId]
   const persona = stripRetiredGuidance(role.persona, roleId)
-  const tools = [...COMMON_TOOLS, ...(roleId === 'mp-operator' ? WECHAT_TOOLS : [])]
+  const declared = Array.isArray(role.toolFilter?.allow) && role.toolFilter.allow.length > 0
+    ? role.toolFilter.allow
+    : undefined
+  const tools = declared ?? FALLBACK_TOOLS
   const frontmatter = [
     '---',
     `displayName: ${scalar(role.displayName)}`,
-    `description: ${scalar(DESCRIPTIONS[roleId])}`,
+    `description: ${scalar(DESCRIPTIONS[roleId] ?? role.description)}`,
     `provider: ${scalar(role.provider)}`,
     `model: ${scalar(role.model)}`,
     `reasoningEffort: ${scalar(role.reasoningEffort)}`,
@@ -95,7 +89,7 @@ for (const roleId of ['web-operator', 'mp-operator']) {
   ]
   const target = join(ROLES_DIR, `${roleId}.md`)
   if (!DRY_RUN) writeFileSync(target, `${frontmatter.join('\n')}\n${persona}\n`, 'utf8')
-  written.push(`${target} (${tools.length} tools, persona ${persona.length} chars)`)
+  written.push(`${target} (${tools.length} tools${declared === undefined ? ', FALLBACK policy — review it' : ''}, persona ${persona.length} chars)`)
 }
 
 // --- settings.yaml cleanup -------------------------------------------------

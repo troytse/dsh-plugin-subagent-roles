@@ -10,18 +10,18 @@ import {
   sumSchemaChars,
 } from '../lib/policy.js'
 
-const visible = ['bash', 'read', 'grep', 'glob', 'read_image', 'todo_write', 'skill', 'mcp__haymony__wechat_project_info', 'mcp__haymony__wechat_page_list']
+const visible = ['bash', 'read', 'grep', 'glob', 'read_image', 'todo_write', 'skill', 'mcp__demo__alpha', 'mcp__demo__beta']
 
 describe('glob compilation', () => {
   test('recognizes glob entries', () => {
     assert.equal(isGlobPattern('bash'), false)
-    assert.equal(isGlobPattern('mcp__haymony__wechat_*'), true)
+    assert.equal(isGlobPattern('mcp__demo__*'), true)
     assert.equal(isGlobPattern('read_?mage'), true)
   })
 
   test('compiles whole-name matchers without regex injection', () => {
-    assert.equal(globToRegExp('mcp__haymony__wechat_*').test('mcp__haymony__wechat_page_list'), true)
-    assert.equal(globToRegExp('mcp__haymony__wechat_*').test('mcp__haymony__harmony_log'), false)
+    assert.equal(globToRegExp('mcp__demo__*').test('mcp__demo__beta'), true)
+    assert.equal(globToRegExp('mcp__demo__*').test('mcp__other__gamma'), false)
     assert.equal(globToRegExp('read_?mage').test('read_image'), true)
     assert.equal(globToRegExp('a.b').test('axb'), false)
   })
@@ -29,9 +29,9 @@ describe('glob compilation', () => {
 
 describe('tool policy expansion', () => {
   test('keeps literal names and expands globs to concrete matches', () => {
-    const result = expandToolFilter({ allow: ['bash', 'mcp__haymony__wechat_*'] }, visible)
+    const result = expandToolFilter({ allow: ['bash', 'mcp__demo__*'] }, visible)
     assert.deepEqual(result.filter, {
-      allow: ['bash', 'mcp__haymony__wechat_page_list', 'mcp__haymony__wechat_project_info'],
+      allow: ['bash', 'mcp__demo__alpha', 'mcp__demo__beta'],
     })
     assert.deepEqual(result.missing, [])
     assert.deepEqual(result.unmatched, [])
@@ -56,9 +56,9 @@ describe('tool policy expansion', () => {
   })
 
   test('an allow list that expands to nothing fails closed', () => {
-    const result = expandToolFilter({ allow: ['mcp__haymony__harmony_*'] }, visible)
+    const result = expandToolFilter({ allow: ['mcp__other__*'] }, visible)
     assert.deepEqual(result.filter, { allow: [] })
-    assert.deepEqual(result.unmatched, ['mcp__haymony__harmony_*'])
+    assert.deepEqual(result.unmatched, ['mcp__other__*'])
   })
 
   test('deny-only policies keep deny and drop an empty deny', () => {

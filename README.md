@@ -53,7 +53,7 @@ whenToUse: 前端 E2E、服务启停…        # 可选，追加在目录行末�
 provider: deepseek-official         # 路由（与 model 成对）；工具不接受逐次覆盖
 model: deepseek-v4-flash
 reasoningEffort: low
-tools: [bash, read, grep, glob, read_image, todo_write, skill, 'mcp__haymony__wechat_*']
+tools: [bash, read, grep, glob, read_image, 'mcp__demo__*']   # 支持通配符
 # 或：toolFilter: { allow: [...] } / { deny: [...] }
 ---
 角色 persona 正文。只有委派时才读盘注入子代理，永不进入委派方上下文。
@@ -97,7 +97,7 @@ tools: [bash, read, grep, glob, read_image, todo_write, skill, 'mcp__haymony__we
 
 - `tools: [...]` 是 **allow 白名单**：只保留列出的，其余工具**连 schema 带系统提示段落一起消失**，调用也会被拒。
 - `toolFilter.deny: [...]` 是黑名单：只想"除少数外都要"就用它。
-- 条目支持通配符 `*` / `?`，例如 `'mcp__haymony__wechat_*'`。
+- 条目支持通配符 `*` / `?`，例如 `'mcp__demo__*'`（把所有 `mcp__demo__` 前缀的工具一次纳入）。
 - 委派时通配符会按**当刻可见的工具名**展开成具体名字。这样既能避免 MCP 尚未注册完导致的硬报错，也不会把过期名字塞给核心。
 - 指名了但当前不可见的工具：默认丢弃并 warn（`onMissingTool: 'error'` 可改为直接拒绝）。角色因此不会因为 MCP 未挂载而委派失败，子代理会按 persona 要求如实回报"工具不可用"。
 - allow 展开后为空时**按空 allow 传下去**（fail closed）：子代理看不到任何继承来的工具，而不是静默拿到全部工具。
@@ -107,12 +107,7 @@ tools: [bash, read, grep, glob, read_image, todo_write, skill, 'mcp__haymony__we
 
 ## 上下文预算
 
-实测（真实 tailnails 会话，standard preset）：父级 71 个工具 / 51,810 字符；本插件把**子代理**从"继承全部"降到"只拿角色需要的"：
-
-| 角色 | allow 集合 | 子代理实测 |
-|---|---|---|
-| web-operator | `bash, read, grep, glob, read_image, todo_write, skill` | 9 个工具 / 11,015 字符（含 2 个框架自留工具） |
-| mp-operator | 上述 + 14 个 `wechat_*` | 23 个工具 / 17,570 字符（含同样 2 个） |
+实测（真实会话，standard preset）：父级 71 个工具 / 51,810 字符；本插件把**子代理**从"继承全部"降到"只拿角色需要的"——一个 `bash, read, grep, glob, read_image, todo_write, skill` 白名单的角色，子代理实测 **9 个工具 / 11,015 字符**（含 2 个无法被过滤的框架自留工具，见「已知边界」）。
 
 插件自身在**主代理**目录里的开销：`subagent_role` 1,074 字符 + 角色目录段（每个角色一行，两个角色时 418 字符，无角色时为 0）。调小 `catalogDescriptionMaxLength`（下限 16）、精简 `tools` 是最直接的两个旋钮。
 
@@ -132,7 +127,7 @@ tools: [bash, read, grep, glob, read_image, todo_write, skill, 'mcp__haymony__we
 
 ## 已知边界（实测确认，不是 bug）
 
-1. **子代理自己层注册的工具不受 allow 名单约束。** `tools.restrict()` 的设计是"只过滤**继承**来的工具；作用域**自己**注册的一律不过滤"（`dsh-tools` 源码注释明确写了）。官方 `dsh-tool-subagent` 在 `modelSelectionSettings: true`（`standard` preset 默认）时会**按每个 agent 自己的 ctx** 注册 `subagent` 与 `list_subagent_models`，所以这两个会留在子代理里。实测（tailnails 会话）：主代理 71 个工具 / 51,810 字符 → web-operator 子代理 9 个 / 11,015 字符、mp-operator 子代理 23 个 / 17,570 字符。
+1. **子代理自己层注册的工具不受 allow 名单约束。** `tools.restrict()` 的设计是"只过滤**继承**来的工具；作用域**自己**注册的一律不过滤"（`dsh-tools` 源码注释明确写了）。官方 `dsh-tool-subagent` 在 `modelSelectionSettings: true`（`standard` preset 默认）时会**按每个 agent 自己的 ctx** 注册 `subagent` 与 `list_subagent_models`，所以这两个会留在子代理里。实测：主代理 71 个工具 / 51,810 字符 → 白名单角色子代理 9 个 / 11,015 字符（其中 2 个就是这两个框架自留工具）。
    - 注意：这两个名字**也不能写进角色的 `tools`**——父代理看得见它们，子代理却无法 restrict，把名字传给核心会直接报错。插件会去掉这类名字重试一次并告警（见「工具策略语义」）。
    - 想把这两个也拿掉：复制一份 preset，把 `tool-subagent` 行的 `modelSelectionSettings` 改成 `false`，工具即退回 preset 作用域（= 继承层），从而可被 allow 名单过滤。代价：内置 `subagent` 失去 `provider`/`model`/`reasoning_effort` 参数、`list_subagent_models` 消失、官方 subagent-model-selection 不再作用于它。**不要改 shipped preset 安装**。
 2. **被隐藏工具的提示词段落只消失一部分。** 作用域感知的段落（如 `tool:read`）会随工具一起消失；静态一句话段落（如 `tool:bash` 的 "[exit code: N]" 提示）即使工具被过滤仍留在子代理 system prompt 里，成本几十字符量级。

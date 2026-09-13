@@ -103,7 +103,7 @@ describe('role documents', () => {
     'provider: deepseek-official',
     'model: deepseek-v4-flash',
     'reasoningEffort: low',
-    'tools: [bash, read, "mcp__haymony__wechat_*"]',
+    'tools: [bash, read, "mcp__demo__*"]',
     '---',
     '你是操作员。',
     '第二行。',
@@ -119,7 +119,7 @@ describe('role documents', () => {
     assert.equal(role.provider, 'deepseek-official')
     assert.equal(role.model, 'deepseek-v4-flash')
     assert.equal(role.reasoningEffort, 'low')
-    assert.deepEqual(role.toolFilter, { allow: ['bash', 'read', 'mcp__haymony__wechat_*'] })
+    assert.deepEqual(role.toolFilter, { allow: ['bash', 'read', 'mcp__demo__*'] })
     assert.equal(role.persona, '你是操作员。\n第二行。')
   })
 
