@@ -112,6 +112,8 @@ The row accepts these options; pass them by overriding the row by id in the prof
 | `timeoutMs` | unset | Tool-call deadline for one foreground delegation. Unset leaves it unbounded. |
 | `enableListTool` | `false` | Register the diagnostic tool. |
 | `listToolName` | `subagent_roles` | Name of the diagnostic tool, so a second row can coexist with the first. |
+| `childPromptTrim` | `full` | Trim a SUBAGENT's prompt: `full` drops tool guidance the child cannot use PLUS the named prompt parts, `tools` keeps the named parts, `off` disables the listener. A top-level agent's prompt is never touched. |
+| `childPromptTrimNames` | `['harness:source', 'app:web-surface', 'ui:deliverable-file-references', 'context:file-reference']` | Prompt parts `full` mode drops, matched against sections AND contexts. Empty the list to keep them all. |
 
 ## Tool policy
 
@@ -137,19 +139,38 @@ node scripts/inspect-session-budget.mjs <session-dir> --all --grep "You are a co
 
 The script decodes a session log read-only and prints the system-prompt size, the tool schemas the session requested, and whether the role catalog reached that session.
 
+## Settings
+
+The trim policy is published as a host settings namespace (`subagent-roles`) and paired with a card in **Settings → Plugins**, so a deployment can retune it without editing files. The row config is the namespace's `base` layer; the card writes the user layer to `~/.dsh/settings.yaml`, and the change applies to the next child turn (`applies: live`) with no restart.
+
+The card draws its own chrome, which the host requires of any browser half, following the host's `PluginCard`: a collapsible header (title, description, rotating chevron), an unsaved badge, the staged form, and Reset / Discard / Save in the footer, styled with the host's own rules and the same `--dsw-alias-*` tokens as the bash, agent-loop, subagent-model-selection, and web-search cards. Two deliberate deviations: the badge is hand-drawn instead of the host's `Tag` primitive, and the failure line uses `--dsw-alias-state-error-primary` (the host's own `--dsw-alias-label-error` is not defined in the installed theme).
+
+Editing follows the host's card conventions: every control renders staged text, nothing is written before Save (the settings scope fences the write with the revision the draft read), Discard drops the drafts, and a reset only STAGES the composed default — the write it performs is a clear, so the field re-inherits the deployment config instead of pinning today's default as an override. A field whose staged text still equals the resolved value is not written at all, so editing one field never pins the other. Editing a field cancels a reset staged for it. A clean save collapses the card; a failed save stays open with the drafts intact and the header's unsaved badge visible.
+
+All copy follows the **Language** setting: the card registers its own locale dictionaries (`zh` / `en`, identical keys) and declares `locale: <namespace>` on the registration, so the renderer binds `t` for it. With no locale service it falls back to its own binding, then to the English dictionary — never to hard-coded bilingual labels.
+
+The card edits the same keys the row config takes. Two pairing rules come from the host, not from this plugin: the Plugins tab dispatches one slot key per served namespace and renders only the cards registered under those keys, which is why the plugin ships a browser half (`lib/client.js`, declared through `dsh.client` and `exports["./client"]`); and a card whose namespace the deployment does not serve is never dispatched. A deployment that mounts a second row under a renamed tool gets the namespace `subagent-roles-<tool>` — that one has no card (the browser half binds the default key), so tune it in `settings.yaml` directly.
+
+A deployment without a settings provider keeps the row config as the sole authority; a namespace that refuses to register (an invalid stored section, a duplicate from another row) is logged and degrades to the row config rather than costing the trim.
+
 ## How it works
 
 - **Catalog.** One prompt section, rendered per assembly, lists the roles of the assembling agent's workspace: a framing line plus `- <id> (<displayName>): <description>` per role. It renders empty — and costs nothing — when a project has no roles, when the catalog is switched off, when the agent is a subagent, or when the delegation tool is not visible to that agent.
 - **Delegation.** `subagent_role` resolves the role against the delegating agent's working directory, then starts a child through `ctx.subagents` with the role's persona, route, and tool filter. The model-facing wording follows the transport provider: a fork provider already seeds the child with this conversation's completed turns, so the tool says to build on them instead of demanding a fully self-contained prompt. The route is preflighted through `llm.resolveCallConfig()` before the child exists, so a typo in a role's `model` or `reasoningEffort` is reported to the delegating agent rather than thrown from inside child creation.
 - **Multiple rows.** The catalog section and the diagnostic tool are named after the row (`<toolName>:catalog`, `listToolName`), so a profile can mount a second row for another transport provider (`toolName: subagent_role_fork`) without either registration colliding.
+- **Child prompt trim.** Core registers most tool-guidance sections as plain text — only `dsh-tool-fs`, `dsh-tool-fs-search`, `dsh-tool-web`, and `dsh-file-reference-local` evaluate the scope — so a child keeps paying for guidance whose tool the role's policy hid from it, plus the Web GUI, harness-checkout, and deliverable instructions it can never act on. One host-plane `system-prompt/assemble` listener drops exactly that dead text: `tool:<name>` guidance for a registered tool the child cannot see, group guidance (`tool:jobs`, `tool:goal`) when every tool its own text names is invisible, and — in `full` mode, the default — the named prompt parts. The rule-derived part needs no maintenance; the named part is per-row overridable because whether a child should still see the harness-checkout or deliverable line is a deployment judgement, not a fact. One list covers both arrays on purpose: the installed core registers `context:file-reference` as a SECTION despite its name, which a contexts-only list silently let through. Measured on a real delegation: a role child's prompt went from 5,765 to 1,904 characters (−67%) while the parent's stayed byte-identical.
 - **Inheritance.** A child joins its parent's agent preset, so it keeps the parent's prompt and tools except where the role's policy removes them. The role persona shadows the deployment persona prefix for that child only.
 
 ## Limitations
 
 - Tools registered into a child's own scope are not affected by a role's tool policy; the core applies restrictions to inherited tools only. The delegation runtime and some tool plugins register per agent, so a child can end up with a small number of tools beyond its allow list.
-- Hiding a tool removes its schema and any scope-aware prompt guidance. Prompt sections with static text stay in the child's prompt.
+- Hiding a tool removes its schema and any scope-aware prompt guidance. Prompt sections with static text stay in the child's prompt — which is what `childPromptTrim` removes, and why `tools` mode needs no maintenance while `full` mode matches section names that a future core release may rename (a renamed section stops being trimmed; nothing breaks).
 - A role persona replaces the deployment persona prefix for the child. The persona suffix, such as the working-directory line, is kept.
 - `respectModelSelection` prefers the policy a Session captured (the same durable projection the official delegation tool writes) and falls back to the live `subagent-model-selection` setting, which is what seeds a fresh Session. A change therefore applies to Sessions that have not captured a policy yet.
+- The plugin contributes one card (Settings → Plugins → Plugin configuration) and no Settings navigation group of its own. A card is the host convention for plugin configuration; a dedicated section like the plugin market's exists because that plugin owns a whole browsing page.
+- `childPromptTrim: 'off'` in the row config unmounts the Settings card with the trim: no namespace is registered, so the Plugins tab has no key to dispatch (deliberate — an operator's `off` is a kill switch the UI must not be able to flip back). To stop trimming while keeping it configurable, set the CARD's mode to `off`, or use `tools` in the row config.
+- The Settings card covers the default row's namespace (`subagent-roles`). A second row renamed through `toolName` owns a different namespace and therefore shows no card.
+- `childPromptTrim` applies to EVERY subagent assembly the host plane observes, not only to children this plugin started: the runtime records no role marker on a child, so `subagent` and counterpart rows benefit too. Tools registered in an agent's own scope (`subagent`, `list_agents`) are absent from the registry's global view, so their guidance is never trimmed — a child that really can call one keeps its instructions.
 - The delegation tool declares no `timeoutMs` unless you set one; an unbounded foreground delegation can outlive the conversation that started it. Bound long runs with `timeoutMs`, `maxDepth`, or the dispatch prompt.
 - Discovery caches are bounded (512 entries), so a very large number of distinct projects in one host process re-stats files more often than it otherwise would. Results are unaffected.
 - The diagnostic script needs Node.js 22.15 or newer for multi-frame zstd decoding; the plugin itself runs on Node.js 20.
