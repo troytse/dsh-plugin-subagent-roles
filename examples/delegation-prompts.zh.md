@@ -3,7 +3,7 @@
 [English](delegation-prompts.md) | 中文
 
 > 这是**模板**，尖括号处按你自己的项目替换。角色定义在 `<项目根>/.dsh/roles/<id>.md`
-> （frontmatter 是 `provider`/`model`/`reasoningEffort`/`tools`，正文是 persona）。
+> （frontmatter 是 `provider`/`model`/`reasoningEffort`/`tools`/`maxToolCalls`，正文是 persona）。
 > 角色文件改动**不需要重启 `dsh web`**（每次提示词组装按 mtime 读取）。
 
 ---
@@ -56,3 +56,36 @@
 
 【回报】1 做了什么（以「工具名 + 目标路径」开头） 2 观察结果（用例名 + passed/failed + 覆盖结论） 3 问题与建议 4 状态：DONE 或 WAITING
 ```
+
+---
+
+## 2. 给角色加上调用额度（插件 >= 0.4.0）
+
+角色文件可以限制子代理能用多少次工具。给只读探索者留够完成盘点的量，给运行时验证者留得少得多——后者主要在等命令返回：
+
+```yaml
+---
+description: 盘点一次跨端改动（只读）
+tools: [read, grep, glob, bash]
+maxToolCalls: 30          # 单位是「次」不是「轮」：并行调用各计 1
+maxToolCallsScope: delegation
+onToolCallBudget: wrap-up # 先注入「请立即收尾」，再宽限 graceToolCalls 次
+graceToolCalls: 1
+---
+
+你是只读探索者。不要修改任何文件；只汇报发现与未决问题。
+```
+
+依据实测的经验值（一次 19 次的盘点与一次 25 次的审查，都突破了没人强制的口头「8 步」护栏）：
+
+| 角色类型 | 建议 `maxToolCalls` |
+|---|---|
+| 只读探索（>= 5 个文件） | 30–40 |
+| 静态审查 | 40–60 |
+| 运行时验证（以跑命令为主） | 15–20 |
+| 省略或 `0` | 不限——超大仓库的逃生口 |
+
+两点值得记住：
+
+- **单位是「次」不是「轮」。** 同一步里三次并行读取就是三次；被策略拒绝的调用同样计数——那次决策已经被消耗掉了。
+- **跨过上限才触发**（等于上限不算），并且那一次调用会在结束前被停下。`graceToolCalls: 0` 让 `wrap-up` 与 `interrupt` 行为完全一致。

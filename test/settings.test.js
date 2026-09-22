@@ -7,8 +7,9 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { DEFAULT_CHILD_NAMES } from '../lib/trim.js'
 import {
+  SettingsSchema,
   TRIM_MODES,
-  TrimSettingsSchema,
+  budgetDefaultsFrom,
   createTrimPolicySource,
   settingsNamespaceFor,
   trimPolicyFrom,
@@ -77,9 +78,41 @@ function rowConfig(extra = {}) {
   return {
     childPromptTrim: 'full',
     childPromptTrimNames: [...DEFAULT_CHILD_NAMES],
+    defaultMaxToolCalls: 0,
+    maxToolCallsHardCap: 0,
+    onToolCallBudget: 'wrap-up',
+    graceToolCalls: 1,
     ...extra,
   }
 }
+
+describe('settings: budget defaults', () => {
+  test('the schema mirrors the row config defaults for the budget too', () => {
+    const resolved = new SettingsSchema({})
+    assert.equal(resolved.defaultMaxToolCalls, 0)
+    assert.equal(resolved.maxToolCallsHardCap, 0)
+    assert.equal(resolved.onToolCallBudget, 'wrap-up')
+    assert.equal(resolved.graceToolCalls, 1)
+  })
+
+  test('the delegation-facing names are derived from the config-facing ones', () => {
+    // The settings key is the row's DEFAULT (`defaultMaxToolCalls`); calling it
+    // `maxToolCalls` next to a role file's own `maxToolCalls` would be ambiguous.
+    assert.deepEqual(budgetDefaultsFrom({ defaultMaxToolCalls: 12, maxToolCallsHardCap: 40, onToolCallBudget: 'interrupt', graceToolCalls: 3 }), {
+      maxToolCalls: 12,
+      maxToolCallsHardCap: 40,
+      onToolCallBudget: 'interrupt',
+      graceToolCalls: 3,
+    })
+  })
+
+  test('an unusable stored section falls back instead of disabling the guard', () => {
+    assert.deepEqual(budgetDefaultsFrom(undefined), { maxToolCalls: 0, maxToolCallsHardCap: 0, onToolCallBudget: 'wrap-up', graceToolCalls: 1 })
+    assert.equal(budgetDefaultsFrom({ defaultMaxToolCalls: -5 }).maxToolCalls, 0)
+    assert.equal(budgetDefaultsFrom({ graceToolCalls: 2.5 }).graceToolCalls, 1)
+    assert.equal(budgetDefaultsFrom({ onToolCallBudget: 'wrapup' }).onToolCallBudget, 'wrap-up')
+  })
+})
 
 describe('settings: namespace naming', () => {
   test('the default row keeps the stable name the browser half binds to', () => {
@@ -115,7 +148,7 @@ describe('settings: policy normalization', () => {
   })
 
   test('the settings schema mirrors the row config defaults', () => {
-    const resolved = new TrimSettingsSchema({})
+    const resolved = new SettingsSchema({})
     assert.equal(resolved.childPromptTrim, 'full')
     assert.deepEqual(resolved.childPromptTrimNames, [...DEFAULT_CHILD_NAMES])
   })
@@ -150,18 +183,44 @@ describe('settings: the live policy source', () => {
     const host = stubCtx({ settings: settings.service })
     const source = createTrimPolicySource({
       ctx: host.ctx,
-      config: rowConfig({ childPromptTrim: 'tools', childPromptTrimNames: ['app:web-surface'] }),
+      config: rowConfig({ childPromptTrim: 'tools', childPromptTrimNames: ['app:web-surface'], defaultMaxToolCalls: 12 }),
       namespace: 'subagent-roles',
     })
     const [registration] = settings.registrations
     assert.equal(registration.ns, 'subagent-roles')
     assert.equal(registration.config.applies, 'live')
+    // Every retunable key rides the ONE namespace, so a key the base omitted
+    // would silently fall back to the schema default instead of the row config.
     assert.deepEqual(registration.config.base, {
       childPromptTrim: 'tools',
       childPromptTrimNames: ['app:web-surface'],
+      defaultMaxToolCalls: 12,
+      maxToolCallsHardCap: 0,
+      onToolCallBudget: 'wrap-up',
+      graceToolCalls: 1,
     })
     assert.equal(source.read().mode, 'off')
     assert.match(host.infos.join('\n'), /editable in Settings/)
+  })
+
+  test('the budget defaults follow the row config without a settings service', () => {
+    const host = stubCtx()
+    const source = createTrimPolicySource({
+      ctx: host.ctx,
+      config: rowConfig({ defaultMaxToolCalls: 30, maxToolCallsHardCap: 40, onToolCallBudget: 'interrupt', graceToolCalls: 2 }),
+      namespace: 'subagent-roles',
+    })
+    assert.deepEqual(source.readBudgetDefaults(), { maxToolCalls: 30, maxToolCallsHardCap: 40, onToolCallBudget: 'interrupt', graceToolCalls: 2 })
+  })
+
+  test('a Settings edit of a budget knob reaches the very next read', () => {
+    const settings = stubSettings()
+    const host = stubCtx({ settings: settings.service })
+    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ defaultMaxToolCalls: 30 }), namespace: 'subagent-roles' })
+    assert.equal(source.readBudgetDefaults().maxToolCalls, 30)
+    settings.setUser({ defaultMaxToolCalls: 5, onToolCallBudget: 'off' })
+    assert.equal(source.readBudgetDefaults().maxToolCalls, 5)
+    assert.equal(source.readBudgetDefaults().onToolCallBudget, 'off')
   })
 
   test('a Settings edit reaches the very next read', () => {

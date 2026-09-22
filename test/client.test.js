@@ -13,7 +13,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
-import { TrimSettingsSchema, settingsNamespaceFor } from '../lib/settings.js'
+import { SettingsSchema, settingsNamespaceFor } from '../lib/settings.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const BUNDLE = join(here, '..', 'lib', 'client.js')
@@ -147,10 +147,20 @@ describe('browser half: the loader envelope', () => {
 
 describe('browser half: staged save semantics', () => {
   const { __internals } = loadBundle().exports
-  const current = { mode: 'full', names: 'harness:source' }
+  /** The resolved values in their RENDERED form, exactly as the card holds them. */
+  const current = {
+    childPromptTrim: 'full',
+    childPromptTrimNames: 'harness:source',
+    defaultMaxToolCalls: '0',
+    maxToolCallsHardCap: '0',
+    onToolCallBudget: 'wrap-up',
+    graceToolCalls: '1',
+  }
+  /** The resolved state with `patch` applied — what the card would render. */
+  const shownWith = (patch) => ({ ...current, ...patch })
 
   test('a changed field is written with its staged text', () => {
-    const plan = __internals.planSave([], { mode: 'tools', names: 'a, b' }, current)
+    const plan = __internals.planSave([], shownWith({ childPromptTrim: 'tools', childPromptTrimNames: 'a, b' }), current)
     assert.deepEqual(plan, [
       { kind: 'set', field: 'childPromptTrim', value: 'tools' },
       { kind: 'set', field: 'childPromptTrimNames', value: ['a', 'b'] },
@@ -160,17 +170,17 @@ describe('browser half: staged save semantics', () => {
   test('a field the user never touched is NOT pinned as an override', () => {
     // Presence in the user layer is what marks a field overridden, so writing an
     // untouched field would shadow later deployment changes to it.
-    const plan = __internals.planSave([], { mode: 'tools', names: 'harness:source' }, current)
+    const plan = __internals.planSave([], shownWith({ childPromptTrim: 'tools' }), current)
     assert.deepEqual(plan, [{ kind: 'set', field: 'childPromptTrim', value: 'tools' }])
   })
 
   test('saving with nothing changed writes nothing', () => {
-    assert.deepEqual(__internals.planSave([], { mode: 'full', names: 'harness:source' }, current), [])
-    assert.deepEqual(__internals.planSave([], { mode: 'full', names: ' harness:source , ' }, current), [])
+    assert.deepEqual(__internals.planSave([], current, current), [])
+    assert.deepEqual(__internals.planSave([], shownWith({ childPromptTrimNames: ' harness:source , ' }), current), [])
   })
 
   test('a staged reset CLEARS the field instead of pinning the current default', () => {
-    const plan = __internals.planSave(['childPromptTrim', 'childPromptTrimNames'], { mode: 'full', names: '' }, current)
+    const plan = __internals.planSave(['childPromptTrim', 'childPromptTrimNames'], current, current)
     assert.deepEqual(plan, [
       { kind: 'unset', field: 'childPromptTrim' },
       { kind: 'unset', field: 'childPromptTrimNames' },
@@ -178,7 +188,7 @@ describe('browser half: staged save semantics', () => {
   })
 
   test('one staged field does not disturb the other draft', () => {
-    const plan = __internals.planSave(['childPromptTrim'], { mode: 'full', names: 'app:web-surface' }, current)
+    const plan = __internals.planSave(['childPromptTrim'], shownWith({ childPromptTrimNames: 'app:web-surface' }), current)
     assert.deepEqual(plan, [
       { kind: 'unset', field: 'childPromptTrim' },
       { kind: 'set', field: 'childPromptTrimNames', value: ['app:web-surface'] },
@@ -186,16 +196,41 @@ describe('browser half: staged save semantics', () => {
   })
 
   test('an empty list field writes an empty array, not the string', () => {
-    assert.deepEqual(__internals.planSave([], { mode: 'off', names: '   ' }, current)[1].value, [])
+    const plan = __internals.planSave([], shownWith({ childPromptTrim: 'off', childPromptTrimNames: '   ' }), current)
+    assert.deepEqual(plan[1].value, [])
+  })
+
+  test('a count field is written as a NUMBER, never as a digit string', () => {
+    const plan = __internals.planSave([], shownWith({ defaultMaxToolCalls: '40', graceToolCalls: '2' }), current)
+    assert.deepEqual(plan, [
+      { kind: 'set', field: 'defaultMaxToolCalls', value: 40 },
+      { kind: 'set', field: 'graceToolCalls', value: 2 },
+    ])
+  })
+
+  test('unusable count text folds to the fallback instead of writing a value the Host refuses', () => {
+    // The Host stores `z.natural()`: "8.5" would be a refused write, so the card
+    // must never turn it into a number.
+    const field = { kind: 'count', fallback: 1 }
+    for (const text of ['', '8.5', '-1', 'abc', ' ']) {
+      assert.equal(__internals.fieldValue(field, text), 1, `unexpected value for ${JSON.stringify(text)}`)
+    }
+    assert.equal(__internals.fieldValue({ kind: 'count', fallback: 0 }, '0'), 0)
+  })
+
+  test('two texts of the same count are the same value', () => {
+    const field = { kind: 'count', fallback: 0 }
+    assert.equal(__internals.sameFieldValue(field, '30', '30'), true)
+    assert.equal(__internals.sameFieldValue(field, '30', '30 '), true)
+    assert.equal(__internals.sameFieldValue(field, '30', '31'), false)
   })
 
   test('editing a field cancels a reset staged for THAT field only', () => {
     // Regression: a Reset followed by typing used to save the clear, silently
     // discarding what the user typed.
     const staged = ['childPromptTrim', 'childPromptTrimNames']
-    const edited = __internals.applyEdit({ draft: undefined, shown: { mode: 'full', names: '' }, staged }, 'childPromptTrimNames', { names: 'app:web-surface' })
+    const edited = __internals.applyEdit({ draft: undefined, shown: shownWith({ childPromptTrimNames: '' }), staged }, 'childPromptTrimNames', { childPromptTrimNames: 'app:web-surface' })
     assert.deepEqual(edited.staged, ['childPromptTrim'])
-    assert.deepEqual(edited.draft, { mode: 'full', names: 'app:web-surface' })
     // …and Save now writes the typed value while still clearing the other field.
     assert.deepEqual(__internals.planSave(edited.staged, edited.draft, current), [
       { kind: 'unset', field: 'childPromptTrim' },
@@ -204,8 +239,13 @@ describe('browser half: staged save semantics', () => {
   })
 
   test('an edit merges into the draft, not into the resolved value', () => {
-    const edited = __internals.applyEdit({ draft: { mode: 'tools', names: 'x' }, shown: { mode: 'full', names: 'y' }, staged: [] }, 'childPromptTrim', { mode: 'off' })
-    assert.deepEqual(edited.draft, { mode: 'off', names: 'x' })
+    const edited = __internals.applyEdit(
+      { draft: shownWith({ childPromptTrim: 'tools' }), shown: current, staged: [] },
+      'childPromptTrim',
+      { childPromptTrim: 'off' },
+    )
+    assert.equal(edited.draft.childPromptTrim, 'off')
+    assert.equal(edited.draft.childPromptTrimNames, 'harness:source')
   })
 
   test('list comparison ignores spacing but not order or content', () => {
@@ -230,12 +270,22 @@ describe('browser half: the settings card registration', () => {
   test('the card edits exactly the fields the host schema declares', () => {
     const { __internals } = loadBundle().exports
     // A source-text match would pass on the constants alone; compare the real
-    // schema keys with the names the save plan writes.
-    const hostFields = Object.keys(new TrimSettingsSchema({})).sort()
-    assert.deepEqual(hostFields, ['childPromptTrim', 'childPromptTrimNames'])
-    assert.deepEqual([__internals.FIELD_MODE, __internals.FIELD_NAMES].sort(), hostFields)
+    // schema keys with the keys the save plan writes. The tool-call budget
+    // controls ride the SAME namespace, so a forgotten field would be invisible
+    // in the UI while settings.yaml still honoured it.
+    const hostFields = Object.keys(new SettingsSchema({})).sort()
+    assert.deepEqual(hostFields, [
+      'childPromptTrim',
+      'childPromptTrimNames',
+      'defaultMaxToolCalls',
+      'graceToolCalls',
+      'maxToolCallsHardCap',
+      'onToolCallBudget',
+    ])
+    assert.deepEqual([...__internals.FIELD_KEYS].sort(), hostFields)
+    const edited = Object.fromEntries(__internals.FIELD_KEYS.map((key) => [key, 'edited']))
     const written = new Set(__internals
-      .planSave([__internals.FIELD_MODE, __internals.FIELD_NAMES], { mode: 'off', names: '' }, { mode: 'full', names: '' })
+      .planSave([...__internals.FIELD_KEYS], edited, edited)
       .map((step) => step.field))
     assert.deepEqual([...written].sort(), hostFields)
   })
@@ -293,7 +343,7 @@ describe('browser half: the settings card registration', () => {
   test('card copy follows the Language setting instead of hard-coding two languages', () => {
     const source = readFileSync(BUNDLE, 'utf8')
     // Both dictionaries ship, keyed identically.
-    for (const key of ['title', 'mode', 'modeHint', 'names', 'namesHint', 'save', 'discard', 'reset', 'unsaved']) {
+    for (const key of ['title', 'mode', 'modeHint', 'names', 'namesHint', 'maxToolCalls', 'hardCap', 'budgetMode', 'grace', 'save', 'discard', 'reset', 'unsaved']) {
       assert.ok(source.includes(`${key}:`), `missing dictionary key: ${key}`)
     }
     assert.match(source, /zh:\s*\{/)

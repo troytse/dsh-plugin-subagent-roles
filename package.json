@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-subagent-roles",
-  "version": "0.3.0",
-  "description": "File-defined subagent roles for DeepSeek Harness: project (.dsh/roles) and global (~/.dsh/roles) role files, a compact role catalog, and real per-role tool filtering.",
+  "version": "0.4.0",
+  "description": "File-defined subagent roles for DeepSeek Harness: project (.dsh/roles) and global (~/.dsh/roles) role files, a compact role catalog, real per-role tool filtering, and a per-role tool-call budget.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -37,10 +37,13 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
     "@deepseek-ai/dsh-subagent": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
     "@deepseek-ai/dsh-tools": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
+    "@deepseek-ai/dsh-session": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0",
     "@deepseek-ai/dsh-tool-subagent": ">=0.1.5-rc.2 <0.2.0-0 || >=0.2.0-0"
   },
   "engines": {

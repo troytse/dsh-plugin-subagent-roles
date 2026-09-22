@@ -6,8 +6,9 @@
  * as a worse error message or a schema that no longer matches, never as a test
  * failure. So the official tool is mounted on the same kind of stub host and both
  * are driven with the same fake child run — every contract-level output that is
- * MEANT to be identical is asserted identical, and the one deliberate difference
- * (the background render line names this plugin's tool) is pinned explicitly.
+ * MEANT to be identical is asserted identical, and the two deliberate differences
+ * are pinned explicitly: the background render line names this plugin's tool, and
+ * the output schema adds the budget-stop variant a `maxToolCalls` role can return.
  *
  * The official package is a devDependency. If it cannot be resolved the suite
  * skips with a reason rather than failing, so a checkout without it still runs.
@@ -104,8 +105,32 @@ async function rejectionMessage(promise) {
 describe('parity with the official delegation tool', {
   skip: official === undefined ? 'the official @deepseek-ai/dsh-tool-subagent is not installed' : false,
 }, () => {
-  test('the model-facing output schema is identical', () => {
-    assert.deepEqual(roleDefinition().output.schema, officialDefinition().output.schema)
+  test('the output schema is the official one plus the pinned budget-stop variant', () => {
+    const ours = roleDefinition().output.schema
+    const theirs = officialDefinition().output.schema
+    // A budgeted role can stop its child, which the official tool has no
+    // counterpart for; that is the ONE schema addition, and the shared variants
+    // must stay byte-identical.
+    assert.equal(ours.oneOf.length, theirs.oneOf.length + 1)
+    assert.deepEqual(ours.oneOf.slice(0, theirs.oneOf.length), theirs.oneOf)
+    assert.deepEqual(ours.oneOf[theirs.oneOf.length], {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', const: 'budget-exceeded' },
+        status: { type: 'string', const: 'tool-call-budget-exceeded' },
+        reason: { type: 'string', const: 'tool-call-budget' },
+        role: { type: 'string' },
+        used: { type: 'integer' },
+        limit: { type: 'integer' },
+        scope: { type: 'string' },
+        mode: { type: 'string' },
+        // The only OPTIONAL member: a stopped child may have produced no text.
+        partialOutput: { type: 'string' },
+        note: { type: 'string' },
+      },
+      required: ['kind', 'status', 'reason', 'role', 'used', 'limit', 'scope', 'mode', 'note'],
+    })
   })
 
   test('foreground output renders identically', () => {

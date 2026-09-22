@@ -4,6 +4,50 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-09-22
+
+### ⚠️ 不兼容提示（务必先读）
+
+- **角色文件与插件版本从此绑定。** 本插件的 frontmatter **未知键会被拒绝**（见 README「文件格式」），因此任何使用了 `maxToolCalls` / `maxToolCallsScope` / `onToolCallBudget` / `graceToolCalls` 的角色文件，在**旧版插件**上会直接报 `unknown frontmatter key` 并被跳过。给角色加额度 = 每台使用该工作区的机器都必须把插件升到 **≥ 0.4.0**。
+- 新增一个**运行时依赖** `@deepseek-ai/dsh-llm`（peer + dev）：收尾通知需要用核心自己的 `createUserMessage` 构造，才能带上正确的 `plugin` 来源（见下方「说明」）。
+
+### 新增
+
+- **角色级工具调用预算硬上限**（`maxToolCalls`）：可选、可继承、由插件**强制执行**，不依赖模型自律。计量单位钉死为**「次」而不是「轮」**——这正是口头「8 步」约定失效的根因（§1 实测：两个只读角色分别跑到 19 / 25 次且都未披露）。
+  - **计数来源是框架自己的 `tool/call` 事件**，不解析模型输出、不采信模型自报。同一步内并行调用**各计 1**；被策略/guard 拒绝的调用计 1、取消后跳过的调用也计 1（核心在 `startCall()` 第一行就无条件落盘 `tool/call`，拒绝/跳过随后补 `tool/result`，因此口径对三种情形一致）。`used === limit` **不触发**，第 `limit + 1` 次才触发。
+  - 四个 frontmatter 字段：`maxToolCalls`（`0` = 不限）、`maxToolCallsScope`（`delegation`（默认）/ `session`）、`onToolCallBudget`（`wrap-up`（默认）/ `interrupt` / `off`）、`graceToolCalls`（默认 `1`；`0` 等价 `interrupt`）。
+  - 四个行配置：`defaultMaxToolCalls`（默认 `0`，**刻意不硬编码全局默认数字**）、`maxToolCallsHardCap`（默认 `0`）、`onToolCallBudget`、`graceToolCalls`。角色文件优先于行/设置默认值；`maxToolCallsHardCap > 0` 时角色值被 `min` 削顶并告警——但**永不削顶「不限」的 `0`**（`0` 是哨兵而不是计数）。
+  - `scope: delegation` 在已知子会话观察到 `turn/start` 时重置计数，这是「每次后台唤醒各起一个新计数」唯一可观测的定义；`scope: session` 跨唤醒累计。
+- **三条委派路径各自收口**：continuable 子代理走 `SubagentRuntime.interrupt(childId, { kind: 'ancestor', agent })`。**前台/后台 one-shot 走插件自持的取消信号**——因为 `interrupt` 对 one-shot/未知目标是**被接受的 no-op**（核心文档原文：「including a one-shot or unknown id」），若只依赖它会得到「看着生效、实际不生效」的最坏失败形态。前台路径把 `exec.signal` 的取消转发进插件自己的 controller；后台路径复用既有 job controller。
+- **收口记录写进子会话**：收尾通知就是这次收口的**持久审计记录**（携带 `used`/`limit`/`scope`/`mode`），因此在**每次收口**时都会投递——包括 `interrupt`——而不是只在 `wrap-up`。这正是需求 5.3/§7「同一事实写入子会话」「可回放到停在哪一次、剩多少」：对一个被直接杀掉的子代理，宿主日志回答不了这个问题。`off` 只告警、不收口，因此不写子会话记录（已在 README 说明）。
+- **`wrap-up` 在下一个 step 边界注入收尾通知**：用 `Agent.inject()`（`send(msg, 'next-step', false)`）而不是 `steer()`/`followup()`——后者 `wakeup: true` 会把**空闲**子代理唤醒成一个新轮次，等于把收尾指令变成额外工作量。通知是一条**显式 `plugin` 来源**的 `user` 消息：省略 source 会被解析成 `user`，那等于让机器生成的指令**冒充人类输入**并继承人类权威。远程传输不发布本地子代理对象（`SubagentRun.localAgent` 为 `undefined`）时，子代理跑在本进程之外：`tool/call` 到达不了护栏（既数不到也停不下），通知也投递不了——插件在**委派时**就告警，而不是把一个并未受保护的角色报成已受保护。进程内传输不受影响。
+- **超限对主代理是「正常结果 + 状态字段」，不是错误**：前台返回 `status: 'tool-call-budget-exceeded'`、`reason: 'tool-call-budget'`、`role`/`used`/`limit`/`scope`/`mode` 与可选的 `partialOutput`，让主代理明确选择「再派一次更窄的任务 / 放宽额度 / 接受部分结论」；抛错会被当成可重试的工具故障，恰好相反。后台 job 的 detail 写明预算收口，从而不再与「用户 kill」混淆。
+- **与 `timeoutMs` 正交**：预算先到 → 上面的结构化结果；deadline 先到 → 核心自己的 `TOOL_TIMEOUT` 错误（核心的 timeout 包装器在 `next()` 返回后按自己的 deadline 命中**替换**结果，插件无法也不应抢这条通道）。两者都有 `breached` / `isTornDown` 判定，绝不互相误报。
+- **可在 Settings → Plugins 里改**：预算四个键与裁剪两个键共用同一个宿主 namespace `subagent-roles`（宿主按 namespace 整体服务，第二次注册同名 namespace 会被拒），行 config 仍是 `base` 层。浏览器卡片改为**声明式字段表**驱动，并对每个键做类型化转换（计数以**数字**写入，非法文本折叠为回退值而绝不写出宿主会拒绝的值）。
+- **可观测**：`subagent_roles` 每个角色多一行 `tool-call budget: 30 (role, scope delegation, mode wrap-up, grace 1)`，来源标注角色文件 / 行默认 / 不限；超限日志固定一行 `[subagent-roles] role=… tool-call budget exceeded: used=… limit=… scope=… mode=…`；收尾通知本身持久化在子会话日志里，因此停在哪一次、剩多少都可回放。
+
+### 说明
+
+- **不改 DSH 核心**。核心确实没有 `maxSteps` / `maxToolCalls` 类旋钮（已 grep 确认），因此护栏全部落在本插件的配置与角色文件格式内。
+- **收口按轮次限流为一次**：`scope: session` 的计数永不复位，因此父代理再次唤醒已超额的 continuable 子代理时会被**再次**停下（第一版把「已上报」与「已收口」合成一个锁，导致只有第一次唤醒会被拦——已修）；但被停下那一批里从未启动的调用（核心会为它们补 `tool/call`）不会各自重复一遍停止。首次触发的事实（`usedAtBreach`）不会被后续唤醒改写。
+- **`maxToolCallsHardCap` 的告警按来源措辞**：削顶的是角色文件就点名角色，削顶的是行/设置默认值就说「the row/Settings default asked for …」，不再把继承来的默认值说成角色自己要求的。
+- **`maxToolCallsHardCap` 的削顶告警也进诊断工具**：`subagent_roles` 多一行 `warning: …`，否则它只显示被削后的数字而不说为什么。
+- **超时与预算的次序**：两者独立呈现——预算收口是结构化结果，超时保留核心的 `TOOL_TIMEOUT`。已补「配置了 `timeoutMs` 但预算先到」的用例；反向的窄竞态（预算已开始收口、deadline 在拆卸期间到期导致核心替换结果）已在 README 已知边界里如实写明。
+- **需求 3.1 的「报错信息带上该键需要插件 ≥ x.y」未实现**：旧版插件的未知键报错只能列出它**自己认识**的键，一个不认识 `maxToolCalls` 的版本不可能在报错里提到它——该要求对已发布版本逻辑上不可达。已改为文档层面的版本绑定（README 文件格式表 + 本文件顶部的不兼容提示）。
+- **计数精度与保证边界**：收口是**反应式**的——跨过上限的那次调用已经写进会话日志，插件是在它结束前停下子代理，而不是阻止它开始。保证的是「子代理会停」，计数则是精确的。
+- **`0` 语义**：额度 `0` 表示不限，且 `maxToolCallsHardCap` **不削顶它**。逃生口优先于上限是刻意的：硬上限的用途是削回一个已声明的数字，而不是禁止「不限」。
+- **零成本**：`0`（不限）不会登记任何计数记录，也不参与事件处理；记录表有上限（256 条，**按插入序**淘汰，不是 LRU），且这只是防泄漏兜底：记录会在子会话 `session/disposed`、或委派结算时正常释放（前台/后台在 `finally` 里释放，continuable 靠 `session/disposed`），因此活记录不会被淘汰掉。
+- **`childPromptTrim: 'off'` 的既有语义保留**：它仍会连同 Settings 卡片一起卸掉整个 namespace，因此预算旋钮也一并在 UI 里消失（额度此时只来自角色文件与行 config）。这是原「off 是不可被 UI 翻回来的关闭开关」约定，未改动。
+- 预算**不出现在角色目录文本里**，只有 `subagent_roles` 报告它，因此带预算的角色对提示词体积没有影响。
+
+### 测试
+
+- 新增 `test/budget.test.js`（41 例）：frontmatter 四种字段的合法/拒绝、额度解析与优先级、硬上限削顶与「不削顶 0」、计数语义（恰好等于上限不触发 / 第 `limit+1` 次触发 / 并行各计 1 / 非 `tool/call` 事件不计 / 未登记会话不计）、三种姿态与 grace 边界（`grace: 0` 等价 `interrupt`）、两种 scope 的隔离与 `turn/start` 重置、健壮性（已在拆卸中的委派不误报 / enforce 与 inject 抛错不外泄 / 通知投递失败要告警 / 记录表有界）、结构化结果的形状。
+- `test/delegation.test.js` 扩到 72 例：三条路径端到端（前台断言 run 信号被 abort 而**不是** `interrupt`、continuable 断言 `interrupt` 参数与 ancestor authority、后台断言 job detail）、收尾通知**必须是 plugin 来源**（防回归到冒充人类输入）、`interrupt` 也必须投递那条持久通知、deadline 先到**不得**产生预算结果、**配置了 `timeoutMs` 但预算先到**必须返回预算结果、`session` 作用域的 continuable 在**下一次唤醒**会被再次停下、子会话 `session/disposed` 会释放记录、远程 provider 降级、行默认生效、诊断工具三态来源与削顶告警。
+- `test/parity.test.js` 把「输出 schema」那条从「完全相同」改为「官方三支逐字节相同 + 追加的 budget-stop 支被显式钉死」，并把两处刻意偏离写进该文件的说明。
+- `test/settings.test.js` / `test/client.test.js` 跟着 namespace 扩到六个键：`base` 层必须带上全部键（否则会静默落到 schema 默认而非行 config）、卡片字段表必须与宿主 schema 的键集**完全一致**、计数以数字写入、非法计数文本折叠为回退值。
+- 新增 `test/seam.test.js`：用**真实的 cordis Context + 真实 SessionStore**（无 LLM、无 profile）验证整条护栏所依赖的**唯一假设**——带 `{ global: true }` 的 `session/event` 订阅确实能收到**子会话**已提交的事件（cordis 默认按 context 过滤监听器，写错就会「静默什么都数不到」，正是本插件已经吃过一次的失败形态）。同时钉住「恰好等于上限不触发 / 跨过才触发 / 未登记会话不计 / `turn/start` 重置 delegation 计数」。这两个包是 devDependencies；缺失时该套件按原因 skip 而不是失败。
+
 ## [0.3.0] - 2026-09-16
 
 ### 新增
