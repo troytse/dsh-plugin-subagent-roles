@@ -4,6 +4,19 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-09-30
+
+### 修复
+
+- **DSH 0.2.0 冷启动直接失败**（`web boot: 1 entry did not activate` / `dsh-plugin-subagent-roles: pending (waiting for service: settingsScope)`）。浏览器半边原先把客户端 `settingsScope` 服务声明为**必需**依赖；0.2.0 移除了该服务（连同插件可注册的设置命名空间），于是这一行永远停在 pending，而**只要有一个行没激活，整个 web boot 就失败**——热加载时不校验，所以只有冷启动才暴露。
+  - `exports.inject` 由 `['slots', 'settingsScope']` 改为 `['slots']`：`settingsScope` 变成**可选**读取（属性访问包了 try/catch，且要求 `bind` 是函数），缺失时卡片主动让位并**只打印一次**说明，宿主半边（角色目录、按角色工具过滤、工具调用预算）继续按行配置正常工作。
+  - **服务晚到不再永久丢卡片**：一次性读取失败后改为监听 `internal/service` 注册事件，`settingsScope` 稍后出现即补挂。此处刻意**不用** `ctx.inject(['settingsScope'], …)`：那会创建一个 pending fiber，而「有行未激活」正是本次要消除的 boot 失败形态。
+  - 卡片 claim 改为**按上下文归属**（`claimOwner`）：HMR 下 apply/dispose 两种顺序都不会丢卡片、也不会重复注册；`settings.plugin.item` 的 inject 交由 `ctx.effect` 拥有，注册残留不再可能。
+- **子代理 run 泄漏**：前台/后台两条委托路径上，`onRun` / `track()`（预算 arm）/ logger 任一抛错都会跳过 `settleRun` / `settleForegroundRun`——而它们是 `run.dispose()` 的唯一调用点，run 会泄漏到整个会话结束。现在这些调用各自独立围栏，settle 始终执行，失败照旧上报（`failed` 判定不变）。
+- **激活路径上的 logger 不再能拖垮整行**：`apply` 主路径缺 `systemPrompt` 时的 warn 改为与同文件其余日志一致的 `safely(...)` 包裹——抛错的 logger 在桌面版上等于 boot 失败。
+- `readModelSelection` 对 0.2.0 的 `settings` 服务（无 `get`）改为**特性检测**，不再是抛错后落进空 catch 的死分支。
+- 0.2.0 上的设置改在 profile 补丁里本插件的**挂载行 `config`** 上（键名与设置卡片完全相同）；卡片本身待按 0.2.0 的 `settings.section` 扩展点重做（见 README「Settings」）。
+
 ## [0.4.0] - 2026-09-22
 
 ### ⚠️ 不兼容提示（务必先读）
@@ -176,6 +189,9 @@
 - 逐角色模型路由，遵守官方 `subagent-model-selection` 授权清单。
 - 可选诊断工具 `subagent_roles`；诊断脚本 `scripts/inspect-session-budget.mjs`。
 
+[0.4.1]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.1.1...v0.1.2

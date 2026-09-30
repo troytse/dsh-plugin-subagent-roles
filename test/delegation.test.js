@@ -632,6 +632,31 @@ describe('subagent_role: row knobs', () => {
 describe('subagent_role: tool-call budget enforcement', () => {
   const budgeted = (budget) => fakeHost({ roles: [{ ...ROLE, ...budget }] })
 
+  test('a failing budget monitor never leaks the run it was tracking', async () => {
+    // `track()` arms the monitor between starting the run and settling it, and
+    // the observability warning runs in the same window. Neither may skip the
+    // settle: `settleForegroundRun` owns `run.dispose()`, so a monitor fault
+    // must not leak the very run it was wiring.
+    const host = budgeted({ maxToolCalls: 2, onToolCallBudget: 'interrupt' })
+    const disposals = []
+    host.ctx.subagents.start = async () => ({
+      id: 'child-unarmed',
+      result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] }),
+      dispose: async () => { disposals.push('child-unarmed') },
+    })
+    const arm = host.budgetMonitor.arm.bind(host.budgetMonitor)
+    let armed = 0
+    host.budgetMonitor.arm = (spec) => {
+      armed += 1
+      if (armed === 1) throw new Error('monitor exploded')
+      return arm(spec)
+    }
+    const value = await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.deepEqual(disposals, ['child-unarmed'], 'the run must be disposed even when arming the monitor throws')
+    assert.equal(value.kind, 'foreground')
+    assert.ok(host.calls.warnings.some((message) => message.includes('could not arm the tool-call budget')), 'the arming failure is reported')
+  })
+
   test('a foreground child is stopped through the signal its run owns', async () => {
     // `SubagentRuntime.interrupt()` is an accepted NO-OP for a one-shot run, so
     // the run's own signal is the only channel that actually stops it.

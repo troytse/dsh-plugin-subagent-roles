@@ -191,7 +191,9 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 
 ## 设置界面
 
-裁剪策略**与工具调用预算**共用一个宿主 settings namespace（`subagent-roles`），并在 **Settings → Plugins** 里配一张卡片，因此不改文件也能调。行 config 是该 namespace 的 `base` 层；卡片把用户层写进 `~/.dsh/settings.yaml`，且**下一个子代理轮次**即生效（`applies: live`），无需重启。预算的四个键与行 config 同名：`defaultMaxToolCalls`、`maxToolCallsHardCap`、`onToolCallBudget`、`graceToolCalls`。角色文件自己声明的 `maxToolCalls` 仍然优先；设置层只提供"角色文件省略时的默认值"。
+> **DSH 0.2.0+ 上卡片让位，改走挂载行 `config`。** 0.2.0 移除了客户端 `settingsScope` 服务与插件可注册的设置命名空间，所以下面这张卡片在该版本上**不会挂载**，插件只打印一次 `settings card skipped: …`。这是刻意的：把缺失的服务声明成**必需**会让整行停在 `pending`，而只要有一行没激活，**整个 web boot 就失败**。宿主半边不受影响——在 profile 补丁里本插件的挂载行 `config` 上写同名键即可（见下）。0.2.0 之前的构建行为与本文完全一致。
+
+裁剪策略**与工具调用预算**共用一个宿主 settings namespace（`subagent-roles`），并在 **Settings → Plugins** 里配一张卡片，因此不改文件也能调。行 config 是该 namespace 的 `base` 层；0.2.0 之前的构建里，卡片把用户层写进 `~/.dsh/settings.yaml`，且**下一个子代理轮次**即生效（`applies: live`），无需重启。预算的四个键与行 config 同名：`defaultMaxToolCalls`、`maxToolCallsHardCap`、`onToolCallBudget`、`graceToolCalls`。角色文件自己声明的 `maxToolCalls` 仍然优先；设置层只提供"角色文件省略时的默认值"。
 
 卡片外观按宿主约定由本插件自画，并**对照宿主的 `PluginCard`**：可折叠的表头（标题 + 说明 + 箭头旋转）、未保存徽标、正文表单、底部 Reset / Discard / Save，直接用宿主自己的规则与 `--dsw-alias-*` token，因此与 bash、agent-loop、subagent 模型选择那几张卡同款。两处刻意偏离并已在代码注释说明：徽标是自绘（宿主用 `Tag` 原语，但那需要声明非基线模块请求）；失败文案用 `--dsw-alias-state-error-primary`，因为宿主自己用的 `--dsw-alias-label-error` 在当前主题里**并不存在**。宿主只负责铺一列并派发 slot —— "chrome, controls, and copy" 全归插件。
 
@@ -199,7 +201,7 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 
 **文案跟随 Language 设置**：卡片注册自己的 locale 词典（`zh` / `en`，键相同），并在注册项上声明 `locale: <namespace>`，由渲染层把 `t` 绑到该 namespace（`props.t`）；拿不到 locale 服务时退回插件自带的英文词典（`locale.bind` 绑定优先，其次英文表）。**不写"中英并列"的硬编码文案** —— 那既不跟随语言设置，也会在两种语言下都显得别扭。
 
-卡片编辑的就是行 config 那六个键（裁剪两个 + 预算四个）。两条配对规则来自宿主而非本插件：Plugins 页为**每个已服务的 namespace** 派发一个 slot key，只渲染注册在该 key 下的卡片——这就是插件要带浏览器半边的原因（`lib/client.js`，经 `dsh.client` 与 `exports["./client"]` 声明）；反之，卡片对应的 namespace 若本部署没有服务，卡片也不会被派发。用改名后的 `toolName` 挂第二行时，其 namespace 是 `subagent-roles-<tool>`，**没有卡片**（浏览器半边绑定的是默认 key），请直接改 `settings.yaml`。
+卡片编辑的就是行 config 那六个键（裁剪两个 + 预算四个）。两条配对规则来自宿主而非本插件：Plugins 页为**每个已服务的 namespace** 派发一个 slot key，只渲染注册在该 key 下的卡片——这就是插件要带浏览器半边的原因（`lib/client.js`，经 `dsh.client` 与 `exports["./client"]` 声明）；反之，卡片对应的 namespace 若本部署没有服务，卡片也不会被派发。用改名后的 `toolName` 挂第二行时，其 namespace 是 `subagent-roles-<tool>`，**没有卡片**（浏览器半边绑定的是默认 key），请直接改该行的 `config`（0.2.0 之前是 `settings.yaml`）。
 
 没有 settings provider 的部署仍以行 config 为唯一权威；namespace 注册失败（存量配置非法、与另一行撞名）会记一条告警并退回行 config，而不是让裁剪失效。
 

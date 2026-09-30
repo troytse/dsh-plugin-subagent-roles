@@ -141,7 +141,9 @@ describe('browser half: the loader envelope', () => {
   test('exports the cordis plugin surface the client loader needs', () => {
     const { exports } = loadBundle()
     assert.equal(typeof exports.apply, 'function')
-    assert.deepEqual([...exports.inject], ['slots', 'settingsScope'])
+    // settingsScope is OPTIONAL: 0.2.0 removed it, and a required-but-absent
+    // service leaves the row pending, which fails the whole web boot.
+    assert.deepEqual([...exports.inject], ['slots'])
   })
 })
 
@@ -487,5 +489,82 @@ describe('browser half: the settings card registration', () => {
       console.warn = original
     }
     assert.match(warnings.join('\n'), /settings card not registered/)
+  })
+
+  test('a build without the settings-scope service skips the card instead of failing the boot', () => {
+    const { exports } = loadBundle()
+    const notes = []
+    const original = console.info
+    console.info = (message) => notes.push(String(message))
+    let touched = 0
+    try {
+      const ctx = {
+        effect: (callback) => { callback(); return () => {} },
+        slots: {
+          inject: () => { touched += 1 },
+          register: () => { touched += 1; return () => {} },
+        },
+      }
+      exports.apply(ctx)
+      exports.apply(ctx)
+    } finally {
+      console.info = original
+    }
+    assert.equal(touched, 0, 'no card work may run without a settings scope')
+    assert.equal(notes.length, 1, 'the skip is explained once, not on every re-apply')
+    assert.match(notes.join('\n'), /settingsScope/)
+  })
+
+  test('a settings scope without `bind` is treated as absent', () => {
+    const { exports } = loadBundle()
+    const notes = []
+    const original = console.info
+    console.info = (message) => notes.push(String(message))
+    let touched = 0
+    try {
+      exports.apply({
+        effect: (callback) => { callback(); return () => {} },
+        settingsScope: {},
+        slots: {
+          inject: () => { touched += 1 },
+          register: () => { touched += 1; return () => {} },
+        },
+      })
+    } finally {
+      console.info = original
+    }
+    assert.equal(touched, 0)
+    assert.match(notes.join('\n'), /settingsScope/)
+  })
+
+  test('a settings scope registered later still mounts the card', () => {
+    const { exports } = loadBundle()
+    const registrations = []
+    let listener
+    const original = console.info
+    console.info = () => {}
+    try {
+      const ctx = {
+        effect: (callback) => {
+          const disposer = callback()
+          return () => { if (typeof disposer === 'function') disposer() }
+        },
+        // A pre-0.2.0 build may activate the client settings plugin AFTER this
+        // one. The registration event is the wait a one-shot read cannot give.
+        on: (name, handler) => { listener = handler; return () => { listener = undefined } },
+        slots: {
+          inject: (_key, callback) => callback(),
+          register: (spec) => { registrations.push(spec); return () => {} },
+        },
+      }
+      exports.apply(ctx)
+      assert.equal(registrations.length, 0, 'nothing mounts before the service arrives')
+      ctx.settingsScope = { bind: () => ({ getSnapshot: () => ({}), subscribe: () => () => {} }) }
+      listener('settingsScope')
+      assert.equal(registrations.length, 1, 'the card mounts when the service finally arrives')
+      assert.equal(registrations[0].key, 'subagent-roles')
+    } finally {
+      console.info = original
+    }
   })
 })
