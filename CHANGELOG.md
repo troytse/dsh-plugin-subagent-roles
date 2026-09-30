@@ -15,6 +15,7 @@
 - **子代理 run 泄漏**：前台/后台两条委托路径上，`onRun` / `track()`（预算 arm）/ logger 任一抛错都会跳过 `settleRun` / `settleForegroundRun`——而它们是 `run.dispose()` 的唯一调用点，run 会泄漏到整个会话结束。现在这些调用各自独立围栏，settle 始终执行，失败照旧上报（`failed` 判定不变）。
 - **激活路径上的 logger 不再能拖垮整行**：`apply` 主路径缺 `systemPrompt` 时的 warn 改为与同文件其余日志一致的 `safely(...)` 包裹——抛错的 logger 在桌面版上等于 boot 失败。
 - `readModelSelection` 对 0.2.0 的 `settings` 服务（无 `get`）改为**特性检测**，不再是抛错后落进空 catch 的死分支。
+- **测试套件适配 0.2.0 依赖线**（此前 CI 在 `0.2.0-rc.2` 的 peer 下全红，本地用 0.1.5 线却是绿的）：parity 测试实例化官方工具时缺了 0.2.0 新增的 `ctx.subagents.resolveMaxDepth` 校验依赖；核心 `settleRun` 把文本字段由 `output` 改名为 `result`；`run_in_background` 的官方描述文案在 **0.1.5 线与 0.2.0 线并不一致**（桌面版 bundle 用旧文案），因此 parity 断言改为「必须是官方两种文案之一」——出现**第三种**文案仍会让该测试失败，这正是它存在的意义。以上只动测试，不改生产行为。
 - 0.2.0 上的设置改在 profile 补丁里本插件的**挂载行 `config`** 上（键名与设置卡片完全相同）；卡片本身待按 0.2.0 的 `settings.section` 扩展点重做（见 README「Settings」）。
 
 ## [0.4.0] - 2026-09-22

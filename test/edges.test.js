@@ -117,8 +117,11 @@ describe('background job callback', () => {
     }))
     await definition.execute({ ...args, run_in_background: true }, exec())
     const settled = await calls.jobs[0].run().done
-    // The core's settleRun normalizes the run into { status, output }.
-    assert.deepEqual(settled, { status: 'completed', output: 'done' })
+    // The core's settleRun normalizes the run. 0.2.0 renames the text field from
+    // `output` to `result`; accept either so this pins THIS plugin's behaviour
+    // rather than the core's envelope.
+    assert.equal(settled.status, 'completed')
+    assert.equal(settled.result ?? settled.output, 'done')
   })
 })
 
