@@ -324,9 +324,9 @@ describe('role loader', () => {
   })
 
   test('a file that heals and breaks the same way again is reported again', () => {
-    // The reported set is per loader and has no natural expiry, so a successful
-    // parse must forget the path's causes: otherwise "fix it, break it the same
-    // way" would be silent for the rest of the session.
+    // A reason stands only while the read keeps seeing it. Healing the file
+    // clears it, so the same breakage after a fix is a fresh appearance rather
+    // than a repeat — the old monotonic set kept it silent for the session.
     const { project, home, cwd } = fixture()
     const file = join(project, '.dsh', 'roles', 'flaky.md')
     writeFileSync(file, '---\nmodel: x\n---\nbody')
@@ -336,6 +336,114 @@ describe('role loader', () => {
     assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
     writeFileSync(file, '---\nmodel: x\n---\nbody')
     assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+  })
+
+  test('a shadowed role that is unshadowed and shadowed again is reported again', () => {
+    // The shadowed identity belongs to the GLOBAL file, which parses fine and so
+    // sits in the mtime cache. A clear driven by "this file parsed" therefore
+    // never runs for it, and the old monotonic set kept the shadow finding for
+    // the rest of the session. The comparison is against the previous assembly's
+    // findings instead, so lifting the shadow forgets it.
+    const { project, home, cwd } = fixture()
+    const projectFile = join(project, '.dsh', 'roles', 'shared.md')
+    const globalFile = join(home, 'roles', 'shared.md')
+    writeFileSync(projectFile, '---\ndescription: project variant\n---\nproject body')
+    writeFileSync(globalFile, '---\ndescription: global variant\n---\nglobal body')
+    const loader = createRoleLoader({ dshHome: home })
+    const shadowed = (result) => result.diagnostics.filter((diagnostic) => /shadowed/.test(diagnostic.reason))
+    const first = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.equal(shadowed(first).length, 1)
+    assert.equal(first.diagnostics[0].path, globalFile)
+    // Lift the shadow: the higher-precedence file goes away and the global one is
+    // used. Nothing is diagnosed, which is what forgets the shadow finding.
+    rmSync(projectFile)
+    assert.deepEqual(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics, [])
+    // Shadow it again: the earlier finding must be visible again, not silent.
+    writeFileSync(projectFile, '---\ndescription: project variant\n---\nproject body')
+    const again = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.equal(shadowed(again).length, 1)
+    assert.equal(again.diagnostics[0].path, globalFile)
+  })
+
+  test('a changed cause is reported once, and switching back is reported again', () => {
+    const { project, home, cwd } = fixture()
+    const file = join(project, '.dsh', 'roles', 'changing.md')
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    const loader = createRoleLoader({ dshHome: home })
+    const first = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.equal(first.diagnostics.length, 1)
+    assert.match(first.diagnostics[0].reason, /`description` is required/)
+    // Same path, different cause: it was not standing before, so it reports.
+    writeFileSync(file, '---\ndescription: d\nunknownKey: 1\n---\nbody')
+    const second = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.equal(second.diagnostics.length, 1)
+    assert.match(second.diagnostics[0].reason, /unknown frontmatter key/)
+    // The cause did not change, so it stays silent.
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+    // Back to the first cause: the previous cause stopped standing, so this is a
+    // fresh appearance rather than a repeat.
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+  })
+
+  test('a file deleted and recreated broken the same way is reported again', () => {
+    const { project, home, cwd } = fixture()
+    const file = join(project, '.dsh', 'roles', 'gone.md')
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    const loader = createRoleLoader({ dshHome: home })
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+    // The path is no longer scanned at all: unobserved is not the same as clean,
+    // but it still leaves the assembly, so its reasons are forgotten.
+    rmSync(file)
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+  })
+
+  test('the same file name under both roots is two identities, not one', () => {
+    const { project, home, cwd } = fixture()
+    const projectFile = join(project, '.dsh', 'roles', 'shared.md')
+    const globalFile = join(home, 'roles', 'shared.md')
+    const broken = '---\nmodel: x\n---\nbody'
+    writeFileSync(projectFile, broken)
+    writeFileSync(globalFile, broken)
+    const loader = createRoleLoader({ dshHome: home })
+    const first = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.equal(first.diagnostics.length, 2)
+    assert.deepEqual(new Set(first.diagnostics.map((diagnostic) => diagnostic.path)), new Set([projectFile, globalFile]))
+    // Already surfaced on both paths, so a second assembly is silent for both.
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+  })
+
+  test('clearing one path never forgets a longer path sharing its prefix', () => {
+    const { project, home, cwd } = fixture()
+    const short = join(project, '.dsh', 'roles', 'a.md')
+    const longer = join(project, '.dsh', 'roles', 'a.md.b.md')
+    writeFileSync(short, '---\nmodel: x\n---\nbody')
+    // Its stem is `a.md.b`, not a role id, so this file has a diagnostic of its own.
+    writeFileSync(longer, '---\ndescription: d\n---\nbody')
+    const loader = createRoleLoader({ dshHome: home })
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 2)
+    // Heal `a.md`; `a.md.b.md` is still standing and must not be forgotten.
+    writeFileSync(short, '---\ndescription: fixed\n---\nbody')
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+    // Break `a.md` again. Only it may surface: a prefix-widened clear would have
+    // dropped `a.md.b.md` and wrongly re-reported it here too.
+    writeFileSync(short, '---\nmodel: x\n---\nbody')
+    const third = loader.loadSync(cwd, { freshDiagnostics: true })
+    assert.deepEqual(third.diagnostics.map((diagnostic) => diagnostic.path), [short])
+  })
+
+  test('a full read does not consume the first fresh report', () => {
+    const { project, home, cwd } = fixture()
+    writeFileSync(join(project, '.dsh', 'roles', 'bad.md'), '---\nmodel: x\n---\nbody')
+    const loader = createRoleLoader({ dshHome: home })
+    // The diagnostic tool's full read is not a report: it must not make the next
+    // per-step read silent, and it must keep seeing the file afterwards.
+    assert.equal(loader.loadSync(cwd).diagnostics.length, 1)
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+    assert.equal(loader.loadSync(cwd).diagnostics.length, 1)
   })
 
   test('the persona limit counts UTF-8 bytes, not code units', () => {

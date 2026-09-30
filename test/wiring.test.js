@@ -129,9 +129,13 @@ describe('plugin wiring', () => {
   })
 
   test('a broken role file is reported once per loader, not on every assembly', () => {
-    // The catalog path shares the loader's reported-diagnostic set with the
-    // delegation path (both pass `freshDiagnostics`). Drop that flag from either one
-    // and this counts two warnings for a single skipped file.
+    // This pins the CATALOG path only: two assemblies of the same cwd must log the
+    // skipped file once. Dropping `freshDiagnostics` from the catalog call in
+    // `lib/index.js` turns this red. The delegation call in `lib/tool.js` shares
+    // the same loader state but is not observed here — it is pinned by
+    // test/delegation.test.js ("a skipped role file warns once, not on every
+    // delegation"), and the two paths sharing one dedup is pinned by the test
+    // below.
     const project = sandbox()
     mkdirSync(join(project, '.git'), { recursive: true })
     mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
@@ -142,6 +146,36 @@ describe('plugin wiring', () => {
     host.sections[0].text(agentAt(project, 0))
     const skipped = host.warnings.filter((message) => message.includes('broken'))
     assert.equal(skipped.length, 1, `expected one report, got ${skipped.length}: ${skipped.join(' | ')}`)
+  })
+
+  test('the catalog and the delegation tool share one dedup, and the full inventory survives', async () => {
+    // The catalog section (`lib/index.js`) and the delegation tool (`lib/tool.js`)
+    // both ask the ONE loader for fresh diagnostics, so the catalog's report must
+    // make the delegation's report silent — and the `subagent_roles` tool, which
+    // reads WITHOUT the flag, must keep the complete inventory.
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'broken.md'), '---\nunknownKey: 1\n---\nbody\n')
+    const host = stubHost()
+    apply(host.ctx, new Config({ enableListTool: true }))
+    const skipped = () => host.warnings.filter((message) => message.includes('broken'))
+    host.sections[0].text(agentAt(project, 0))
+    assert.equal(skipped().length, 1, 'the catalog reports the finding once')
+    const at = {
+      agent: { options: {}, session: { header: { cwd: project }, requestHeader: () => ({}) } },
+      signal: new AbortController().signal,
+    }
+    // The delegation fails on ROLE RESOLUTION — `role "whatever" does not exist`,
+    // because the only role file here is the broken one — not on any start seam.
+    // The diagnostic log happens before that throw, which is the point.
+    const delegation = host.registered.find((definition) => definition.name === 'subagent_role')
+    await assert.rejects(delegation.execute({ role: 'whatever', prompt: 'p', description: 'd' }, at))
+    assert.equal(skipped().length, 1, 'the delegation path shares the catalog dedup')
+    const list = host.registered.find((definition) => definition.name === 'subagent_roles')
+    const text = await list.execute({}, at)
+    assert.match(text, /skipped files: 1/)
+    assert.match(text, /broken/)
   })
 
   test('catalogScope all reaches subagents too', () => {

@@ -409,12 +409,13 @@ describe('subagent_role: run modes', () => {
   })
 
   test('a skipped role file warns once, not on every delegation', async () => {
-    // The tool path now asks the loader for fresh diagnostics, which shares the
-    // reported set with the catalog provider (`lib/index.js`). This test used to
-    // pin the OPPOSITE — "reported on every delegation" — because the tool read
-    // `loadSync` without the flag, so one broken file repeated its line for every
-    // delegation of the whole session. The requirement is one warning per
-    // file+reason per loader, while the FIRST observation still warns; the
+    // The tool path asks the loader for fresh diagnostics, which shares the
+    // per-path standing findings with the catalog provider (`lib/index.js`). This
+    // test used to pin the OPPOSITE — "reported on every delegation" — because the
+    // tool read `loadSync` without the flag, so one broken file repeated its line
+    // for every delegation of the whole session. The requirement is one warning
+    // per file+reason per loader while the finding stands: the FIRST observation
+    // warns, and a finding that clears and returns warns again. The
     // `subagent_roles` diagnostic tool keeps the full inventory because it reads
     // `loadSync` without the flag (see test/roles.test.js).
     const project = sandbox()
@@ -426,8 +427,17 @@ describe('subagent_role: run modes', () => {
     host.loader = createRoleLoader({ dshHome: sandbox() })
     const definition = tool(host)
     const at = exec({ agent: { session: { header: { cwd: project } } } })
-    await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
-    await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
+    const first = await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
+    const second = await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
+    // The operator is the only one told: the diagnostic is written to the log and
+    // never enters the tool result the model reads (the claim the comment beside
+    // `freshDiagnostics` now makes).
+    assert.equal('diagnostics' in first, false)
+    assert.equal('diagnostics' in second, false)
+    // `skipped` names the diagnostic family itself, so a `shadowed by …` finding
+    // leaking into the result is caught too. The generic word `description` would
+    // both miss that and false-positive on any future field carrying it.
+    assert.equal(JSON.stringify(second).includes('skipped'), false)
     const skipped = host.calls.warnings.filter((message) => message.includes('skipped bad'))
     assert.equal(skipped.length, 1)
     assert.match(skipped[0], /skipped bad \(project\) at .*bad\.md: `description` is required/)
