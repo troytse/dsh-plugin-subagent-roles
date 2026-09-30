@@ -14,6 +14,18 @@ The plugin registers one delegation tool and advertises the roles found for the 
 
 ## Install
 
+**DSH desktop app** — install it from the app's own **Plugins** page (sidebar → Plugins): paste the package name to pull it from npm, or an **absolute path** to install a local checkout.
+
+```
+dsh-plugin-subagent-roles
+# or a local checkout
+/path/to/dsh-plugin-subagent-roles
+```
+
+The `desktop` profile belongs to the application — `dsh plugin --profile desktop …` is refused on purpose (`profile "desktop" is managed exclusively by the Electron application`) — so the Plugins page is the supported channel there. It installs the package, appends the bundle to the profile, and the row then appears in the Settings inventory. Host-side rows load immediately; client-side surfaces — this plugin's Settings card, or another plugin's sidebar, task or usage pages — need one page refresh before they show up.
+
+**CLI profiles (`dsh web`, TUI, headless)** — install into that profile by name, or link a checkout:
+
 ```sh
 # from npm
 dsh plugin --profile web add dsh-plugin-subagent-roles
@@ -23,6 +35,8 @@ dsh plugin --profile web add link:/path/to/dsh-plugin-subagent-roles
 ```
 
 Restart the profile afterwards (`dsh web`). The package ships a bundle patch, so it inserts its single row without any composition edit. Requires Node.js 20 or newer, together with a DSH deployment that provides `@deepseek-ai/dsh-tools` and `@deepseek-ai/dsh-subagent`.
+
+Both dependency lines are supported. On the **0.1.5** line the Settings → Plugins card tunes the row; on the **0.2.0** line that card never mounts — 0.2.0 removed plugin-registered settings namespaces — and the row's `config` is the channel instead (see [Settings](#settings)).
 
 ## Quick start
 

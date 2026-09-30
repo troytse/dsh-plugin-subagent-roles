@@ -14,6 +14,18 @@
 
 ## 安装
 
+**桌面版（DSH 桌面 App）**——在 App 侧栏的 **Plugins** 页里安装：粘包名即从 npm 拉取，粘**绝对路径**则安装本地检出。
+
+```
+dsh-plugin-subagent-roles
+# 或本地检出
+/path/to/dsh-plugin-subagent-roles
+```
+
+`desktop` 这个 profile 归 App 独占——`dsh plugin --profile desktop …` 会被明确拒绝（`profile "desktop" is managed exclusively by the Electron application`），所以桌面版走 Plugins 页。它会安装包、把 bundle 追加进 profile，随后该行会出现在设置页的清单里。宿主侧的行会即时加载；客户端界面（本插件的设置卡片，或其它插件的侧栏/任务页/用量页）需要刷新一次页面才会出现。
+
+**命令行 profile（`dsh web`、TUI、headless）**——按名字装进对应 profile，或 link 一个检出：
+
 ```sh
 # 从 npm 安装
 dsh plugin --profile web add dsh-plugin-subagent-roles
@@ -22,7 +34,9 @@ dsh plugin --profile web add dsh-plugin-subagent-roles
 dsh plugin --profile web add link:/path/to/dsh-plugin-subagent-roles
 ```
 
-装好后重启 profile（`dsh web`）。包内自带 bundle patch，会自行插入它的那一行组合，无需手改 composition。要求 Node.js 20 以上，以及提供 `@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-subagent` 的 DSH 部署。
+装好后重启该 profile（`dsh web`）。包内自带 bundle patch，会自行插入它的那一行组合，无需手改 composition。要求 Node.js 20 以上，以及提供 `@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-subagent` 的 DSH 部署。
+
+**两条依赖线都支持**：**0.1.5** 线上由 Settings → Plugins 的卡片调节本行；**0.2.0** 线上该卡片不会挂载——0.2.0 移除了插件可注册的设置命名空间——改由本行的 `config` 调节（见[设置界面](#设置界面)）。
 
 ## 快速开始
 

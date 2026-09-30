@@ -6,10 +6,24 @@
  * asserted here.
  */
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, describe, test } from 'node:test'
 import { Config } from '../lib/config.js'
 import { createToolCallBudgetMonitor } from '../lib/budget.js'
+import { createRoleLoader } from '../lib/roles.js'
 import { createRoleListTool, createRoleTool } from '../lib/tool.js'
+
+const roots = []
+function sandbox() {
+  const dir = mkdtempSync(join(tmpdir(), 'subagent-roles-delegation-'))
+  roots.push(dir)
+  return dir
+}
+after(() => {
+  for (const dir of roots) rmSync(dir, { recursive: true, force: true })
+})
 
 const ROLE = {
   id: 'web-verifier',
@@ -37,7 +51,7 @@ function run(output = 'ok', id = 'child-1', localAgent) {
 }
 
 function fakeHost(options = {}) {
-  const calls = { start: [], continuable: [], jobs: [], warnings: [], infos: [], interrupts: [], subscriptions: [] }
+  const calls = { start: [], continuable: [], jobs: [], warnings: [], infos: [], debugs: [], interrupts: [], subscriptions: [] }
   const provider = {
     name: 'spawn',
     capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, ...options.capabilities },
@@ -48,6 +62,7 @@ function fakeHost(options = {}) {
   const ctx = {
     logger: {
       info: (message) => calls.infos.push(String(message)),
+      debug: (message) => calls.debugs.push(String(message)),
       warn: (message) => calls.warnings.push(String(message)),
       error: (message) => calls.warnings.push(String(message)),
     },
@@ -393,10 +408,29 @@ describe('subagent_role: run modes', () => {
     }
   })
 
-  test('skipped role files are reported on every delegation', async () => {
-    const host = fakeHost({ diagnostics: [{ id: 'bad', path: '/p/.dsh/roles/bad.md', source: 'project', reason: 'missing description' }] })
-    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    assert.match(host.calls.warnings.join('\n'), /skipped bad \(project\) at \/p\/\.dsh\/roles\/bad\.md: missing description/)
+  test('a skipped role file warns once, not on every delegation', async () => {
+    // The tool path now asks the loader for fresh diagnostics, which shares the
+    // reported set with the catalog provider (`lib/index.js`). This test used to
+    // pin the OPPOSITE — "reported on every delegation" — because the tool read
+    // `loadSync` without the flag, so one broken file repeated its line for every
+    // delegation of the whole session. The requirement is one warning per
+    // file+reason per loader, while the FIRST observation still warns; the
+    // `subagent_roles` diagnostic tool keeps the full inventory because it reads
+    // `loadSync` without the flag (see test/roles.test.js).
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'bad.md'), '---\nmodel: x\n---\nbody')
+    writeFileSync(join(project, '.dsh', 'roles', 'web-verifier.md'), '---\ndescription: verify pages\n---\nYou verify.')
+    const host = fakeHost({ roles: [] })
+    host.loader = createRoleLoader({ dshHome: sandbox() })
+    const definition = tool(host)
+    const at = exec({ agent: { session: { header: { cwd: project } } } })
+    await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
+    await definition.execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, at)
+    const skipped = host.calls.warnings.filter((message) => message.includes('skipped bad'))
+    assert.equal(skipped.length, 1)
+    assert.match(skipped[0], /skipped bad \(project\) at .*bad\.md: `description` is required/)
   })
 
   test('one-shot background registers a job', async () => {
@@ -620,6 +654,26 @@ describe('subagent_role: row knobs', () => {
     const inherited = fakeHost({ roles: [{ ...ROLE, provider: undefined, model: undefined, reasoningEffort: undefined }] })
     await tool(inherited).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     assert.match(inherited.calls.infos.join('\n'), /routeLayer=inherit/)
+
+    // An effort-only binding is NOT an inheritance: the child really receives it, and
+    // `debug` sits below a default exporter's level, so the info line is the only
+    // place a default deployment can read it.
+    const effortOnly = fakeHost({ roles: [{ ...ROLE, provider: undefined, model: undefined, reasoningEffort: 'high' }] })
+    await tool(effortOnly).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.match(effortOnly.calls.infos.join('\n'), /route=inherit\+effort=high/)
+  })
+
+  test('a large tool policy is bounded in the info line and kept full in debug', async () => {
+    // `allow: ['*']` expands to every visible tool (six here; `run_code` is never
+    // passable to a policy). The info line must stay bounded, so it spells out
+    // only POLICY_SUMMARY_NAMES names; the full JSON belongs to debug.
+    const host = fakeHost({ roles: [{ ...ROLE, toolFilter: { allow: ['*'] } }] })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    const info = host.calls.infos.join('\n')
+    assert.match(info, /toolPolicy=allow=6\[bash,edit,grep,read,…\]/)
+    // The elided names and the full array are on the debug line, never the info one.
+    assert.doesNotMatch(info, /"allow":/)
+    assert.match(host.calls.debugs.join('\n'), /toolPolicy=\{"allow":\["bash","edit","grep","read","subagent","write"\]\}/)
   })
 
   test('the diagnostic tool honours a configured name', () => {

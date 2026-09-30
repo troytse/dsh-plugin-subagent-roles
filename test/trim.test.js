@@ -189,6 +189,26 @@ describe('trim: full mode', () => {
   })
 })
 
+describe('trim: a part without text', () => {
+  test('missing text is counted as empty, never thrown', () => {
+    // `.length` on a missing `text` used to throw, and the registration catch then
+    // skipped trimming the WHOLE assembly for that turn. The explicit count keeps
+    // the degradation local: no content rule can fire for that part, nothing is
+    // counted as saved, and the readable parts are still evaluated.
+    const result = trimChildPrompt(
+      assembly(
+        [['tool:jobs', undefined], ['tool:read', 'Use the read tool.'], ['app:web-surface', undefined]],
+        [['context:file-reference', undefined]],
+      ),
+      policy(['read'], { mode: 'full' }),
+    )
+    assert.deepEqual(result.sections.map((section) => section.name), ['tool:jobs', 'tool:read'])
+    assert.equal(result.saved, 0)
+    assert.deepEqual(result.droppedSections, [])
+    assert.deepEqual(result.droppedContexts, [])
+  })
+})
+
 // ---- registration ---------------------------------------------------------
 
 function stubHost(options = {}) {
@@ -356,6 +376,17 @@ describe('trim registration', () => {
     const payload = assembly([['tool:workflow', 'Use the workflow tool.']])
     const value = await assemble(host, payload, {})
     assert.equal(value.sections.length, 1)
+  })
+
+  test('a part without text no longer reaches the trim catch', async () => {
+    const host = stubHost({ globalSchemas: [{ name: 'workflow' }], scopeSchemas: [] })
+    apply(host.ctx, new Config({}))
+    // A hand-built entry with no `text`: before the explicit guard this threw and
+    // the outer catch logged "child prompt trim skipped", skipping the assembly.
+    const payload = { sections: [{ name: 'app:web-surface' }], contexts: [] }
+    const value = await assemble(host, payload, { agent: childAgent(1) })
+    assert.deepEqual(value.sections, [])
+    assert.equal(host.warnings.filter((message) => message.includes('child prompt trim skipped')).length, 0)
   })
 
   test('the trim reports one info line per child and falls back to debug after', async () => {

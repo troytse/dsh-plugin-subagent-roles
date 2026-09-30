@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.2] - 2026-09-30
+
+这一版收掉 0.4.1 之后的三个「轻微」遗留项，以及它们引出的对抗式复审发现（复审在仓库外副本里独立复验了每条回归测试「有没有牙齿」，并逐条推翻了或确认了作者的声称）。
+
+### 修复
+
+- **坏角色文件的诊断不再每次委托都刷屏**：委派路径的 `loadSync` 现在与目录（catalog）路径共用 loader 的「已报告诊断」集合（identity = `path\0reason`）。**首次一定告知模型**，同文件同原因每条只报一次；同文件换原因仍会再报。旧测试 `skipped role files are reported on every delegation` 把「每次委托都报」钉成了预期，已**有意识改写**为新语义——旧行为正是本项要消除的噪音。
+- **诊断去重不再吞掉「修好后复发」**：该集合原先没有任何过期机制，于是「坏 → 修好 → 用同样原因再改坏」会永久静默。现在文件**解析成功即遗忘该路径的所有已报告原因**，再次损坏会重新告警。
+- **委派 info 日志有界**：原先把完整 `toolFilter`（`allow: ['*']` 会展开成全部可见工具）与路由 JSON 内嵌进一行。现在 info 只写有界摘要（`allow=N[前4个名字,…]`、`provider/model[/effort]`、`inherit+effort=<effort>`），完整对象降级到 `debug`。
+- **只绑定 `reasoningEffort` 的角色不再被误报为继承**：`summarizeRoute` 原先只看 provider/model，两者皆空就报 `inherit`，而子代理实际拿到 `{ reasoningEffort: 'high' }`——在合法配置下把真实路由报成了相反的值（且 `debug` 低于默认日志级别，默认部署只能看到这个错值）。现在输出 `inherit+effort=high`；该函数此前**完全没有测试**，这正是漏网原因，已补。
+- **裁剪不再靠异常兜底**：`section.text.length` / `context.text.length` 在 `text` 缺失时抛错，被外层 catch 兜成「整份 assembly 这一次不裁剪」。现在 `textLength()` 把缺失文本视为 0：该 part 视为空、内容规则不触发、不计入 saved、**其余 part 照常裁剪**，也不再产生误导性的 skipped 警告（同函数的 context 分支同一潜伏问题一并处理）。
+
+### 文档
+
+- README（中英）安装段补上**桌面版（DSH 桌面 App）**通道：侧栏 **Plugins** 页按包名或绝对路径安装；并说明 `desktop` profile 由 App 独占、`dsh plugin --profile desktop …` 会被明确拒绝，Plugins 页才是受支持通道；宿主行即时加载、客户端界面需刷新一次页面；**0.1.5 与 0.2.0 两条依赖线都支持**及其设置通道差异。
+
+### 验证
+
+- `node --test` **338 项全过**（0.4.1 为 333），`node --check` 全部通过。
+- **两条依赖线都跑过**：本地 0.1.5-rc.3 线与干净安装的 `0.2.0-rc.2` 线（CI 实际解析结果）均 338/338。
+- 每条新回归测试都做了**变异验证**（在仓库外副本把修复改回旧写法，确认对应测试会红）：诊断去重、跨路径共用集合、路由摘要有界、只绑 effort 的路由、去重过期，共 5 处。
+- 对抗式复审确认：本次改动**未改变任何模型可见行为**（工具 schema、prompt 文案、返回值均未动；`subagent_roles` 诊断工具的全量清单仍完整）。
+
 ## [0.4.1] - 2026-09-30
 
 ### 修复
@@ -190,6 +213,7 @@
 - 逐角色模型路由，遵守官方 `subagent-model-selection` 授权清单。
 - 可选诊断工具 `subagent_roles`；诊断脚本 `scripts/inspect-session-budget.mjs`。
 
+[0.4.2]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/troytse/dsh-plugin-subagent-roles/compare/v0.2.1...v0.3.0

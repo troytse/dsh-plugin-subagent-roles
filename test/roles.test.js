@@ -323,6 +323,21 @@ describe('role loader', () => {
     assert.equal(loader.loadSync(cwd).diagnostics.length, 1)
   })
 
+  test('a file that heals and breaks the same way again is reported again', () => {
+    // The reported set is per loader and has no natural expiry, so a successful
+    // parse must forget the path's causes: otherwise "fix it, break it the same
+    // way" would be silent for the rest of the session.
+    const { project, home, cwd } = fixture()
+    const file = join(project, '.dsh', 'roles', 'flaky.md')
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    const loader = createRoleLoader({ dshHome: home })
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+    writeFileSync(file, '---\ndescription: fine\n---\nbody')
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 0)
+    writeFileSync(file, '---\nmodel: x\n---\nbody')
+    assert.equal(loader.loadSync(cwd, { freshDiagnostics: true }).diagnostics.length, 1)
+  })
+
   test('the persona limit counts UTF-8 bytes, not code units', () => {
     const body = '中'.repeat(20)
     const { error } = parseRoleDocument('worker', `---\ndescription: d\n---\n${body}`, { maxBodyBytes: 30 })

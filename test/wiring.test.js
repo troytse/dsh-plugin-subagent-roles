@@ -128,6 +128,22 @@ describe('plugin wiring', () => {
     assert.equal(host.sections[0].text(agentAt(project, 1)), '')
   })
 
+  test('a broken role file is reported once per loader, not on every assembly', () => {
+    // The catalog path shares the loader's reported-diagnostic set with the
+    // delegation path (both pass `freshDiagnostics`). Drop that flag from either one
+    // and this counts two warnings for a single skipped file.
+    const project = sandbox()
+    mkdirSync(join(project, '.git'), { recursive: true })
+    mkdirSync(join(project, '.dsh', 'roles'), { recursive: true })
+    writeFileSync(join(project, '.dsh', 'roles', 'broken.md'), '---\nunknownKey: 1\n---\nbody\n')
+    const host = stubHost()
+    apply(host.ctx, new Config({}))
+    host.sections[0].text(agentAt(project, 0))
+    host.sections[0].text(agentAt(project, 0))
+    const skipped = host.warnings.filter((message) => message.includes('broken'))
+    assert.equal(skipped.length, 1, `expected one report, got ${skipped.length}: ${skipped.join(' | ')}`)
+  })
+
   test('catalogScope all reaches subagents too', () => {
     const project = fixtureProject()
     const host = stubHost()
