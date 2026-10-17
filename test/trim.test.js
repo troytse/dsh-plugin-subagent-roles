@@ -436,15 +436,19 @@ describe('trim registration', () => {
     assert.equal((host.handlers.get('system-prompt/assemble') ?? []).length, 0)
   })
 
-  test('a Settings switch to off reaches the listener and stops trimming', async () => {
-    const host = stubHost({ globalSchemas: [{ name: 'workflow' }], scopeSchemas: [] })
-    apply(host.ctx, new Config({ childPromptTrim: 'full' }))
+  test('the row config posture controls trimming for that row activation', async () => {
+    // 0.2.1 has no live user layer: the posture is the row config, and changing it
+    // restarts the row. Two activations therefore model the two postures.
+    const on = stubHost({ globalSchemas: [{ name: 'workflow' }], scopeSchemas: [] })
+    apply(on.ctx, new Config({ childPromptTrim: 'full' }))
     const payload = assembly([['tool:workflow', 'Use the workflow tool.']])
-    assert.equal((await assemble(host, payload, { agent: childAgent(1) })).sections.length, 0)
-    // The user layer now says off; the very next assembly must be untouched.
-    host.settings.setUser({ childPromptTrim: 'off' })
-    const next = await assemble(host, assembly([['tool:workflow', 'Use the workflow tool.']]), { agent: childAgent(1, 'child-2') })
-    assert.deepEqual(next.sections.map((section) => section.name), ['tool:workflow'])
+    assert.equal((await assemble(on, payload, { agent: childAgent(1) })).sections.length, 0)
+
+    const off = stubHost({ globalSchemas: [{ name: 'workflow' }], scopeSchemas: [] })
+    apply(off.ctx, new Config({ childPromptTrim: 'off' }))
+    // "off" is the operator's kill switch: no assemble listener is registered at
+    // all, so the next activation is untouched by construction.
+    assert.equal((off.handlers.get('system-prompt/assemble') ?? []).length, 0)
   })
 
   test('full mode reaches the child through the configured names', async () => {

@@ -14,6 +14,8 @@
  * skips with a reason rather than failing, so a checkout without it still runs.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { describe, test } from 'node:test'
 import { Config } from '../lib/config.js'
 import { createRoleTool } from '../lib/tool.js'
@@ -23,6 +25,13 @@ try {
   official = await import('@deepseek-ai/dsh-tool-subagent')
 } catch {
   official = undefined
+}
+/** Version of the installed official tool, used to decide whether parity applies. */
+let officialVersion
+try {
+  officialVersion = JSON.parse(readFileSync(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tool-subagent/package.json'), 'utf8')).version
+} catch {
+  officialVersion = undefined
 }
 
 const ROLE = {
@@ -84,7 +93,12 @@ function roleDefinition(options = {}) {
     logger: { info() {}, warn() {}, error() {} },
     get: () => undefined,
     tools: { schemas: () => [{ name: 'read' }] },
-    subagents: { start: provider.start },
+    subagents: {
+      startActivation: async (spec) => {
+        const run = await provider.start()
+        return { childId: spec.childId, result: run.result, dispose: run.dispose }
+      },
+    },
   }
   const loader = { loadSync: () => ({ roles: [ROLE], diagnostics: [] }), projectRootFor: () => '/p' }
   return createRoleTool({ ctx, config: new Config({}), provider, loader })
@@ -106,7 +120,11 @@ async function rejectionMessage(promise) {
 }
 
 describe('parity with the official delegation tool', {
-  skip: official === undefined ? 'the official @deepseek-ai/dsh-tool-subagent is not installed' : false,
+  skip: official === undefined
+    ? 'the official @deepseek-ai/dsh-tool-subagent is not installed'
+    : officialVersion?.startsWith('0.2.1') === true
+      ? 'DSH 0.2.1 changed the official tool to fire-and-return activation ids; this plugin deliberately keeps the wait-and-return contract, so byte parity no longer applies'
+      : false,
 }, () => {
   test('the output schema is the official one plus the pinned budget-stop variant', () => {
     const ours = roleDefinition().output.schema

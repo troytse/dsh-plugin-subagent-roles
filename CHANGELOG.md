@@ -4,6 +4,47 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-10-18
+
+这一版把插件移植到 **DSH 0.2.1**。0.2.1 移除了 `subagents.start` / `startContinuable`、start 请求里的 `persona` / `toolFilter`、`SubagentRun.localAgent`、`dsh-subagent` 的 `settleRun` 导出，以及客户端设置服务与插件设置命名空间。**角色文件格式、项目/全局优先级、每角色模型绑定、预算与目录均不变。**
+
+### 破坏性变更
+
+- 只支持 DSH **0.2.1-rc.1+**（`engines.dsh: ^0.2.1-rc.1`）。0.2.0 及更早继续用 0.4.3。
+
+### 委派
+
+- `ctx.subagents.start(provider, request)` / `startContinuable(spec)` → `startActivation(spec)`：
+  - `label` / `signal` 移到 spec 上，`delivery: 'parent'`；
+  - 返回 `SubagentActivation`：`childId`、`result`、`dispose()`；
+  - foreground 仍等待结果后释放，background 仍经 `ctx.jobs` 结算，continuable 仍只返回 durable id 并保留 resident 子代理。
+- background 的结算改为插件自带的 `settleActivation`（0.2.0 的 `settleRun` 语义：completed 带最终文本、本地 aborted 记 `killed`、带 diagnostic 的 aborted 记 `failed`）。0.2.1 只导出低层的 `settleRunResult`，其参数契约与本插件的 job 结果不同。
+- 删除 `startToleratingUnrestrictableNames` 的重试路径；不可限制的工具名现在在子上下文安装 restriction 时就地丢弃一次（`onMissingTool: 'error'` 时仍然报错）。
+
+### Composition
+
+- persona 与 toolFilter 不再随 request 下发（0.2.1 的 `SubagentStartRequest` 已删除这两个字段，transport 能力位也不再声明它们）。插件在 `subagent/start` 事件里把两者安装到子上下文：
+  - persona 仍是 `deployment:persona-prefix` section，order 取 `DEPLOYMENT_PERSONA_PREFIX`，插值语义不变；
+  - toolFilter 仍按父上下文可见工具展开后调用子上下文的 `tools.restrict()`。
+- **确定性关联**：`startActivation` 允许调用方指定 `childId`，插件先生成 id 并登记 composition；`subagent/start` 在宿主 materialize 内、初始 prompt 提交之前同步触发，因此首轮 assembly 就能看到 persona 与限制后的工具集。provider 若忽略该 id 或发布不了本地子代理，插件在 start 返回后按 `activation.childId` 再尝试一次并告警。
+- 能力门禁只保留 `agentOptions` / `depthLimit`；`persona` / `toolFilter` 不再是 transport 能力，旧能力位（有或没有）都不再影响委派。
+
+### 设置
+
+- 删除 `settings.register` 的命名空间：0.2.1 的 Settings 服务没有该 API。裁剪与预算的六个旋钮以**行 config** 为准。
+- 浏览器半边在 0.2.1 上不再挂载卡片（`settingsScope` / `settings.plugin.item` 均已移除），只打印一次说明后不注册 slot；不会因为缺少服务让整行停在 `pending`。
+
+### 预算与可观测性
+
+- `run.localAgent` → `ctx.agents.get(childId)`；wrap-up 通知、可观测性告警与 `session/event` 计数按 `childId` 关联。
+- `SubagentActivation.dispose()` 仍由 foreground / background 的结算路径拥有；continuable 不释放，由 runtime 的 interrupt 收口。
+
+### 元数据与验证
+
+- `engines.dsh` / peer 依赖改为 `^0.2.1-rc.1`；开发依赖固定 `0.2.1-rc.2` 并在仓库内本地安装，不再借用 `~/.dsh/profiles/node_modules` 的 0.2.0 副本。
+- `node --test` **331 项全过**；`npm run lint` 通过。
+- 官方 `subagent` 工具在 0.2.1 改为 fire-and-return activation id、不再等待结果，因此 `test/parity.test.js` 的逐字节对照在 0.2.1 上跳过（脚本保留给 0.2.0 线），由本插件自己的委派/预算/能力测试覆盖。
+
 ## [0.4.3] - 2026-09-30
 
 这一版收掉 0.4.2 独立确认 review 提出的 5 条非阻塞项：其中 2 条是**已发布的文档/注释说了不实的话**，1 条是**真实的静默失败**，其余是结构与注释的准确性。

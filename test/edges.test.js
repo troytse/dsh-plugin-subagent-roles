@@ -34,14 +34,44 @@ const ROLE = {
 }
 
 function toolFor(startBehaviour, options = {}) {
-  const calls = { warnings: [], jobs: [] }
+  const calls = { warnings: [], jobs: [], subscriptions: [] }
+  const child = {
+    ctx: {
+      systemPrompt: { getSectionOrder: () => 1, section() {} },
+      tools: { restrict() {} },
+    },
+  }
   const ctx = {
     logger: { info() {}, warn: (m) => calls.warnings.push(String(m)), error: (m) => calls.warnings.push(String(m)) },
-    get: (name) => (name === 'jobs' ? { start: (spec) => { calls.jobs.push(spec); return 'job-1' } } : undefined),
+    get: (name) => {
+      if (name === 'jobs') return { start: (spec) => { calls.jobs.push(spec); return 'job-1' } }
+      if (name === 'agents') return { get: () => child }
+      return undefined
+    },
     tools: { schemas: () => [{ name: 'read' }, { name: 'grep' }] },
-    subagents: { start: startBehaviour, startContinuable: async () => ({ childId: 'c1' }) },
+    on: (name, listener) => {
+      const entry = { name, listener }
+      calls.subscriptions.push(entry)
+      return () => {
+        const at = calls.subscriptions.indexOf(entry)
+        if (at >= 0) calls.subscriptions.splice(at, 1)
+      }
+    },
+    effect: (run) => {
+      run()
+      return () => {}
+    },
+    subagents: {
+      startActivation: async (spec) => {
+        // Publish the child before the activation resolves, as the host does.
+        for (const entry of [...calls.subscriptions]) {
+          if (entry.name === 'subagent/start') entry.listener({ id: spec.childId })
+        }
+        return startBehaviour(spec)
+      },
+    },
   }
-  const provider = { name: 'spawn', capabilities: { persona: true, toolFilter: true, agentOptions: true, depthLimit: true } }
+  const provider = { name: 'spawn', capabilities: { agentOptions: true, depthLimit: true } }
   const loader = { loadSync: () => ({ roles: [ROLE], diagnostics: [] }), projectRootFor: () => '/p' }
   return { definition: createRoleTool({ ctx, config: new Config(options.config ?? {}), provider, loader }), calls }
 }
@@ -65,7 +95,7 @@ describe('result rendering', () => {
 describe('disposal handling', () => {
   test('a dispose failure surfaces instead of being swallowed', async () => {
     const { definition } = toolFor(async () => ({
-      id: 'r1',
+      childId: 'r1',
       result: Promise.resolve({ stopReason: 'completed', output: [] }),
       dispose: async () => { throw new Error('dispose exploded') },
     }))
@@ -74,7 +104,7 @@ describe('disposal handling', () => {
 
   test('a run failure plus a dispose failure aggregates both', async () => {
     const { definition } = toolFor(async () => ({
-      id: 'r2',
+      childId: 'r2',
       result: Promise.resolve({ stopReason: 'error', output: [] }),
       dispose: async () => { throw new Error('dispose exploded') },
     }))
@@ -97,9 +127,9 @@ describe('background job callback', () => {
   test('a cancelled job reports killed', async () => {
     // The real registry rejects a start whose signal aborts; the fake must too,
     // otherwise the job callback would wait forever.
-    const abortAware = (_providerName, request) => new Promise((_resolve, reject) => {
-      if (request.signal.aborted) reject(new Error('aborted'))
-      else request.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+    const abortAware = (spec) => new Promise((_resolve, reject) => {
+      if (spec.signal.aborted) reject(new Error('aborted'))
+      else spec.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
     })
     const { definition, calls } = toolFor(abortAware)
     await definition.execute({ ...args, run_in_background: true }, exec())
@@ -111,15 +141,14 @@ describe('background job callback', () => {
 
   test('a completed job resolves the run', async () => {
     const { definition, calls } = toolFor(async () => ({
-      id: 'bg',
+      childId: 'bg',
       result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'done' }] }),
       dispose: async () => {},
     }))
     await definition.execute({ ...args, run_in_background: true }, exec())
     const settled = await calls.jobs[0].run().done
-    // The core's settleRun normalizes the run. 0.2.0 renames the text field from
-    // `output` to `result`; accept either so this pins THIS plugin's behaviour
-    // rather than the core's envelope.
+    // The plugin's own activation settle normalizes the result; the job outcome
+    // carries the child's final text under `result`.
     assert.equal(settled.status, 'completed')
     assert.equal(settled.result ?? settled.output, 'done')
   })

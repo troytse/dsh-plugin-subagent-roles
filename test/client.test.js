@@ -512,7 +512,7 @@ describe('browser half: the settings card registration', () => {
     }
     assert.equal(touched, 0, 'no card work may run without a settings scope')
     assert.equal(notes.length, 1, 'the skip is explained once, not on every re-apply')
-    assert.match(notes.join('\n'), /settingsScope/)
+    assert.match(notes.join('\n'), /no settings card on this build/)
   })
 
   test('a settings scope without `bind` is treated as absent', () => {
@@ -534,7 +534,7 @@ describe('browser half: the settings card registration', () => {
       console.info = original
     }
     assert.equal(touched, 0)
-    assert.match(notes.join('\n'), /settingsScope/)
+    assert.match(notes.join('\n'), /no settings card on this build/)
   })
 
   test('a settings scope registered later still mounts the card', () => {

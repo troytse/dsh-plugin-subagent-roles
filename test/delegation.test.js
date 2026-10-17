@@ -51,10 +51,12 @@ function run(output = 'ok', id = 'child-1', localAgent) {
 }
 
 function fakeHost(options = {}) {
-  const calls = { start: [], continuable: [], jobs: [], warnings: [], infos: [], debugs: [], interrupts: [], subscriptions: [] }
+  const calls = { start: [], jobs: [], warnings: [], infos: [], debugs: [], interrupts: [], subscriptions: [] }
+  const children = new Map()
+  const agents = options.agents ?? { get: (id) => children.get(id) }
   const provider = {
     name: 'spawn',
-    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, ...options.capabilities },
+    capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, ...options.capabilities },
     ...(options.inheritsParentContext === true ? { inheritsParentContext: true } : {}),
     ...(options.agentRouteDefaults !== undefined ? { agentRouteDefaults: options.agentRouteDefaults } : {}),
     ...(options.prepareContinuable === false ? {} : { prepareContinuable: () => Promise.resolve({}) }),
@@ -76,13 +78,23 @@ function fakeHost(options = {}) {
         if (at >= 0) calls.subscriptions.splice(at, 1)
       }
     },
+    // The composition bridge is registered as an effect; running it eagerly and
+    // keeping its disposer mirrors cordis closely enough for these tests.
+    effect: (run) => {
+      const dispose = run()
+      return () => {
+        try {
+          dispose?.()
+        } catch {}
+      }
+    },
     get: (name) => {
       if (name === 'llm') return options.llm ?? { listProviders: () => [{ id: 'deepseek-official' }] }
       if (name === 'settings') return options.settings
       if (name === 'jobs') return options.jobs
       if (name === 'sessionProjections') return options.sessionProjections
       if (name === 'sessions') return options.sessions
-      if (name === 'agents') return options.agents
+      if (name === 'agents') return agents
       return undefined
     },
     tools: {
@@ -91,14 +103,49 @@ function fakeHost(options = {}) {
         : (options.visible ?? VISIBLE).filter((name) => name !== 'run_code' || options.exposeRunCode === true).map((name) => ({ name }))),
     },
     subagents: {
-      start: async (providerName, request) => {
-        calls.start.push({ providerName, request })
-        if (options.failFirstStart !== undefined && calls.start.length === 1) throw options.failFirstStart
-        return run()
-      },
-      startContinuable: async (spec) => {
-        calls.continuable.push(spec)
-        return { childId: 'durable-1' }
+      startActivation: async (spec) => {
+        if (options.failFirstStart !== undefined && calls.start.length === 0) throw options.failFirstStart
+        const childId = spec.childId ?? 'child-1'
+        const sections = []
+        const restrictions = []
+        let restrictAttempts = 0
+        const child = {
+          ctx: {
+            systemPrompt: {
+              getSectionOrder: () => 100,
+              section: (section) => sections.push(section),
+            },
+            tools: {
+              restrict: (filter) => {
+                restrictAttempts += 1
+                if (options.restrictFailure !== undefined && restrictAttempts === 1) throw options.restrictFailure
+                restrictions.push(filter)
+              },
+            },
+          },
+        }
+        children.set(childId, child)
+        // The host publishes the child synchronously inside materialization, BEFORE
+        // the initial prompt. The bridge must have installed the composition by the
+        // time this returns, so emit here rather than after the activation resolves.
+        for (const entry of [...calls.subscriptions]) {
+          if (entry.name === 'subagent/start') entry.listener({ id: childId, provider: spec.provider, local: true })
+        }
+        calls.start.push({
+          providerName: spec.provider,
+          spec,
+          request: {
+            ...spec.request,
+            label: spec.label,
+            ...(sections[0] !== undefined ? { persona: sections[0].text } : {}),
+            ...(restrictions[0] !== undefined ? { toolFilter: restrictions[0] } : {}),
+          },
+        })
+        return {
+          childId,
+          result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: options.output ?? 'ok' }] }),
+          dispose: async () => {},
+        }
       },
       interrupt: (targetSessionId, authority) => {
         calls.interrupts.push({ targetSessionId, authority })
@@ -111,7 +158,7 @@ function fakeHost(options = {}) {
   }
   // Created from the same ctx as the tool, so both share ONE observation seam.
   const budgetMonitor = createToolCallBudgetMonitor({ ctx, log: (message) => calls.warnings.push(String(message)) })
-  return { ctx, provider, loader, budgetMonitor, calls }
+  return { ctx, provider, loader, budgetMonitor, calls, children }
 }
 
 /**
@@ -283,19 +330,20 @@ describe('subagent_role: what reaches the child', () => {
     await assert.rejects(tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()), /visible tool catalog is unreadable/)
   })
 
-  test('a child-unrestrictable name is dropped and the start retried once', async () => {
+  test('a child-unrestrictable name is dropped and the restriction retried once', async () => {
     const failure = new Error('tools.restrict() names unknown global tool "subagent"; known global tools: read, grep')
-    const host = fakeHost({ failFirstStart: failure, roles: [{ ...ROLE, toolFilter: { allow: ['read', 'grep', 'subagent'] } }] })
+    const host = fakeHost({ restrictFailure: failure, roles: [{ ...ROLE, toolFilter: { allow: ['read', 'grep', 'subagent'] } }] })
     await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    assert.equal(host.calls.start.length, 2)
-    assert.deepEqual(host.calls.start[0].request.toolFilter, { allow: ['read', 'grep', 'subagent'] })
-    assert.deepEqual(host.calls.start[1].request.toolFilter, { allow: ['read', 'grep'] })
+    assert.equal(host.calls.start.length, 1)
+    // The bridge retries the restriction in place: the child never sees the
+    // unknown name, and no second child is created.
+    assert.deepEqual(host.calls.start[0].request.toolFilter, { allow: ['read', 'grep'] })
     assert.match(host.calls.warnings.join('\n'), /cannot restrict "subagent"/)
   })
 
   test('with onMissingTool=error the restrict failure stays loud', async () => {
     const failure = new Error('tools.restrict() names unknown global tool "subagent"')
-    const host = fakeHost({ failFirstStart: failure, roles: [{ ...ROLE, toolFilter: { allow: ['read', 'subagent'] } }] })
+    const host = fakeHost({ restrictFailure: failure, roles: [{ ...ROLE, toolFilter: { allow: ['read', 'subagent'] } }] })
     await assert.rejects(
       tool(host, { onMissingTool: 'error' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()),
       /unknown global tool/,
@@ -318,9 +366,15 @@ describe('subagent_role: route and capability gates', () => {
     await assert.rejects(tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()), /is not routable/)
   })
 
-  test('a provider without the persona capability refuses the role', async () => {
-    const host = fakeHost({ capabilities: { persona: false } })
-    await assert.rejects(tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec()), /does not support the persona capability/)
+  test('a provider without the old persona capability still gets the role persona', async () => {
+    // 0.2.1 removed persona/toolFilter from the transport capability set; the
+    // plugin installs both on the child itself, so an old capability bitmap must
+    // neither be required nor consulted.
+    const host = fakeHost({ capabilities: { persona: false, toolFilter: false } })
+    await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    assert.equal(host.calls.start.length, 1)
+    assert.equal(host.calls.start[0].request.persona, ROLE.persona)
+    assert.deepEqual(host.calls.start[0].request.toolFilter, { allow: ['read', 'grep'] })
   })
 
   test('respectModelSelection=false ignores the authorized list', async () => {
@@ -350,13 +404,13 @@ describe('subagent_role: run modes', () => {
   test('the default is a foreground run that settles its result', async () => {
     const host = fakeHost()
     const value = await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    assert.deepEqual(value, { kind: 'foreground', runId: 'child-1', output: [{ type: 'text', text: 'ok' }] })
+    assert.deepEqual(value, { kind: 'foreground', runId: host.calls.start[0].spec.childId, output: [{ type: 'text', text: 'ok' }] })
   })
 
   test('a non-completed foreground run is an error carrying the partial output', async () => {
     const host = fakeHost()
-    host.ctx.subagents.start = async () => ({
-      id: 'child-2',
+    host.ctx.subagents.startActivation = async (spec) => ({
+      childId: spec.childId,
       result: Promise.resolve({ stopReason: 'max-tokens', output: [{ type: 'text', text: 'half done' }] }),
       dispose: async () => {},
     })
@@ -365,8 +419,8 @@ describe('subagent_role: run modes', () => {
 
   test("the provider's own diagnostic reaches the delegating agent", async () => {
     const host = fakeHost()
-    host.ctx.subagents.start = async () => ({
-      id: 'child-3',
+    host.ctx.subagents.startActivation = async (spec) => ({
+      childId: spec.childId,
       result: Promise.resolve({
         stopReason: 'error',
         diagnostic: 'adapter refused: context window exceeded',
@@ -382,13 +436,19 @@ describe('subagent_role: run modes', () => {
 
   test('a completed run is unaffected by the diagnostic path', async () => {
     const host = fakeHost()
-    host.ctx.subagents.start = async () => ({
-      id: 'child-4',
-      result: Promise.resolve({ stopReason: 'completed', diagnostic: 'noise', output: [{ type: 'text', text: 'ok' }] }),
-      dispose: async () => {},
-    })
+    let started
+    host.ctx.subagents.startActivation = async (spec) => {
+      started = spec.childId
+      return {
+        childId: spec.childId,
+        result: Promise.resolve({ stopReason: 'completed', diagnostic: 'noise', output: [{ type: 'text', text: 'ok' }] }),
+        dispose: async () => {},
+      }
+    }
     const value = await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    assert.deepEqual(value, { kind: 'foreground', runId: 'child-4', output: [{ type: 'text', text: 'ok' }] })
+    assert.equal(value.kind, 'foreground')
+    assert.equal(value.runId, started)
+    assert.deepEqual(value.output, [{ type: 'text', text: 'ok' }])
   })
 
   test('every non-completed stop reason becomes an actionable error', async () => {
@@ -399,8 +459,8 @@ describe('subagent_role: run modes', () => {
     ]
     for (const [stopReason, pattern] of cases) {
       const host = fakeHost()
-      host.ctx.subagents.start = async () => ({
-        id: 'child-x',
+      host.ctx.subagents.startActivation = async (spec) => ({
+        childId: spec.childId,
         result: Promise.resolve({ stopReason, output: [] }),
         dispose: async () => {},
       })
@@ -457,16 +517,20 @@ describe('subagent_role: run modes', () => {
 
   test('continuable mode returns the durable child id', async () => {
     const host = fakeHost()
+    let started
+    host.ctx.subagents.startActivation = async (spec) => {
+      started = spec.childId
+      return { childId: spec.childId, result: new Promise(() => {}), dispose: async () => {} }
+    }
     const value = await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    assert.deepEqual(value, { kind: 'continuable', subagentId: 'durable-1' })
-    assert.equal(host.calls.continuable.length, 1)
+    assert.deepEqual(value, { kind: 'continuable', subagentId: started })
+    assert.equal(host.calls.start.length, 0)
   })
 
   test('continuable mode with run_in_background=false waits instead', async () => {
     const host = fakeHost()
     const value = await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd', run_in_background: false }, exec())
     assert.equal(value.kind, 'foreground')
-    assert.equal(host.calls.continuable.length, 0)
   })
 
   test('a disabled run_in_background is not advertised and refuses a forced call', async () => {
@@ -653,7 +717,7 @@ describe('subagent_role: row knobs', () => {
     await tool(host, { backgroundMode: 'continuable', enableRunInBackground: false })
       .execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     assert.match(host.calls.infos.join('\n'), /mode=foreground/)
-    assert.equal(host.calls.continuable.length, 0)
+    assert.equal(host.calls.start.length, 1)
   })
 
   test('the log reports the resolved route layer', async () => {
@@ -703,8 +767,8 @@ describe('subagent_role: tool-call budget enforcement', () => {
     // must not leak the very run it was wiring.
     const host = budgeted({ maxToolCalls: 2, onToolCallBudget: 'interrupt' })
     const disposals = []
-    host.ctx.subagents.start = async () => ({
-      id: 'child-unarmed',
+    host.ctx.subagents.startActivation = async (spec) => ({
+      childId: 'child-unarmed',
       result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] }),
       dispose: async () => { disposals.push('child-unarmed') },
     })
@@ -727,9 +791,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const host = budgeted({ maxToolCalls: 2, onToolCallBudget: 'interrupt' })
     let settle
     let runSignal
-    host.ctx.subagents.start = async (providerName, request) => {
-      runSignal = request.signal
-      return { id: 'child-9', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
+    host.ctx.subagents.startActivation = async (spec) => {
+      runSignal = spec.signal
+      return { childId: 'child-9', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
     }
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host, 'the foreground child to be tracked')
@@ -753,7 +817,7 @@ describe('subagent_role: tool-call budget enforcement', () => {
   test('the budget stop is logged with the pinned wording', async () => {
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'interrupt' })
     let settle
-    host.ctx.subagents.start = async () => ({ id: 'child-log', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-log', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host, 'the child to be tracked')
     emitCalls(host, 'child-log', 2)
@@ -767,10 +831,11 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const execution = exec()
     const value = await tool(host, { backgroundMode: 'continuable' })
       .execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, execution)
-    assert.deepEqual(value, { kind: 'continuable', subagentId: 'durable-1' })
-    emitCalls(host, 'durable-1', 3)
+    assert.equal(value.kind, 'continuable')
+    const childId = value.subagentId
+    emitCalls(host, childId, 3)
     assert.equal(host.calls.interrupts.length, 1)
-    assert.equal(host.calls.interrupts[0].targetSessionId, 'durable-1')
+    assert.equal(host.calls.interrupts[0].targetSessionId, childId)
     assert.equal(host.calls.interrupts[0].authority.kind, 'ancestor')
     assert.equal(host.calls.interrupts[0].authority.agent, execution.agent)
   })
@@ -782,9 +847,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
       : original(name)))(host.ctx.get)
     let settle
     let runSignal
-    host.ctx.subagents.start = async (providerName, request) => {
-      runSignal = request.signal
-      return { id: 'child-bg', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
+    host.ctx.subagents.startActivation = async (spec) => {
+      runSignal = spec.signal
+      return { childId: 'child-bg', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
     }
     const value = await tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd', run_in_background: true }, exec())
     assert.deepEqual(value, { kind: 'background', jobId: 'job-9' })
@@ -804,8 +869,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const injected = []
     const localAgent = { id: 'child-w', inject: (message) => injected.push(message) }
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'wrap-up', graceToolCalls: 1 })
+    host.children.set('child-w', localAgent)
     let settle
-    host.ctx.subagents.start = async () => ({ id: 'child-w', localAgent, result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-w', localAgent, result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host, 'the child to be tracked')
     emitCalls(host, 'child-w', 2)
@@ -827,7 +893,8 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const injected = []
     const liveAgent = { id: 'durable-1', inject: (message) => injected.push(message) }
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'wrap-up', graceToolCalls: 1 })
-    host.ctx.get = ((original) => (name) => (name === 'agents' ? { get: (id) => (id === 'durable-1' ? liveAgent : undefined) } : original(name)))(host.ctx.get)
+    host.children.set('durable-1', liveAgent)
+    host.ctx.subagents.startActivation = async () => ({ childId: 'durable-1', result: new Promise(() => {}), dispose: async () => {} })
     await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     emitCalls(host, 'durable-1', 2)
     assert.equal(injected.length, 1)
@@ -843,9 +910,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const deadline = new AbortController()
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'interrupt' })
     let settle
-    host.ctx.subagents.start = async () => {
+    host.ctx.subagents.startActivation = async (spec) => {
       deadline.abort('TOOL_TIMEOUT')
-      return { id: 'child-t', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
+      return { childId: 'child-t', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} }
     }
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec({ signal: deadline.signal }))
     await armed(host, 'the child to be tracked')
@@ -857,7 +924,7 @@ describe('subagent_role: tool-call budget enforcement', () => {
   test('a remote child with no local agent degrades wrap-up to a warned stop', async () => {
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'wrap-up', graceToolCalls: 0 })
     let settle
-    host.ctx.subagents.start = async () => ({ id: 'child-r', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-r', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host, 'the child to be tracked')
     emitCalls(host, 'child-r', 2)
@@ -871,7 +938,7 @@ describe('subagent_role: tool-call budget enforcement', () => {
     // this process. Arming a record that can never fire while staying quiet is
     // the exact "looks enforced, is not" failure this feature exists to remove.
     const host = budgeted({ maxToolCalls: 5, onToolCallBudget: 'interrupt' })
-    host.ctx.subagents.start = async () => ({
+    host.ctx.subagents.startActivation = async (spec) => ({
       id: 'remote-child',
       result: Promise.resolve({ stopReason: 'completed', output: [{ type: 'text', text: 'ok' }] }),
       dispose: async () => {},
@@ -883,7 +950,8 @@ describe('subagent_role: tool-call budget enforcement', () => {
   test('an observable child is not warned about', async () => {
     const localAgent = { id: 'child-1', inject: () => {} }
     const host = budgeted({ maxToolCalls: 5, onToolCallBudget: 'interrupt' })
-    host.ctx.subagents.start = async () => ({ id: 'child-1', localAgent, result: new Promise(() => {}), dispose: async () => {} })
+    host.children.set('child-1', localAgent)
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-1', localAgent, result: new Promise(() => {}), dispose: async () => {} })
     void tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host)
     assert.doesNotMatch(host.calls.warnings.join('\n'), /publishes no local child agent/)
@@ -895,8 +963,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
     const injected = []
     const localAgent = { id: 'child-i', inject: (message) => injected.push(message) }
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'interrupt' })
+    host.children.set('child-i', localAgent)
     let settle
-    host.ctx.subagents.start = async () => ({ id: 'child-i', localAgent, result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-i', localAgent, result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
     const pending = tool(host).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host)
     emitCalls(host, 'child-i', 2)
@@ -913,7 +982,7 @@ describe('subagent_role: tool-call budget enforcement', () => {
     // agent untouched.
     const host = budgeted({ maxToolCalls: 1, onToolCallBudget: 'interrupt' })
     let settle
-    host.ctx.subagents.start = async () => ({ id: 'child-to', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
+    host.ctx.subagents.startActivation = async (spec) => ({ childId: 'child-to', result: new Promise((resolve) => { settle = resolve }), dispose: async () => {} })
     const pending = tool(host, { timeoutMs: 60000 }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     await armed(host)
     emitCalls(host, 'child-to', 2)
@@ -927,27 +996,28 @@ describe('subagent_role: tool-call budget enforcement', () => {
     // Regression: the reported latch used to double as the enforcement latch, so
     // only the first wake of a `session`-scoped child was ever stopped.
     const host = budgeted({ maxToolCalls: 1, maxToolCallsScope: 'session', onToolCallBudget: 'interrupt' })
-    await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
-    emitCalls(host, 'durable-1', 2, 1)
+    const value = await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    const childId = value.subagentId
+    emitCalls(host, childId, 2, 1)
     assert.equal(host.calls.interrupts.length, 1)
-    emit(host, 'durable-1', { type: 'turn/start', data: { turn: 2 } })
-    emitCalls(host, 'durable-1', 1, 2)
+    emit(host, childId, { type: 'turn/start', data: { turn: 2 } })
+    emitCalls(host, childId, 1, 2)
     assert.equal(host.calls.interrupts.length, 2, 'the over-budget child is stopped on the wake too')
   })
 
   test('disposing a child session releases its record instead of leaving it to evict a live one', async () => {
     const host = budgeted({ maxToolCalls: 2, onToolCallBudget: 'interrupt' })
-    await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
+    const value = await tool(host, { backgroundMode: 'continuable' }).execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())
     assert.equal(host.budgetMonitor.size, 1)
-    emitDisposed(host, 'durable-1')
+    emitDisposed(host, value.subagentId)
     assert.equal(host.budgetMonitor.size, 0)
   })
 
   test('an unlimited role leaves the run signal untouched', async () => {
     const host = fakeHost()
     let runSignal
-    host.ctx.subagents.start = async (providerName, request) => {
-      runSignal = request.signal
+    host.ctx.subagents.startActivation = async (spec) => {
+      runSignal = spec.signal
       return run()
     }
     const execution = exec()
@@ -958,9 +1028,9 @@ describe('subagent_role: tool-call budget enforcement', () => {
   test('the row default budgets a role that declares none', async () => {
     const host = fakeHost()
     let runSignal
-    host.ctx.subagents.start = async (providerName, request) => {
-      runSignal = request.signal
-      return { id: 'child-d', result: new Promise(() => {}), dispose: async () => {} }
+    host.ctx.subagents.startActivation = async (spec) => {
+      runSignal = spec.signal
+      return { childId: 'child-d', result: new Promise(() => {}), dispose: async () => {} }
     }
     const pending = tool(host, { defaultMaxToolCalls: 1, onToolCallBudget: 'interrupt' })
       .execute({ role: 'web-verifier', prompt: 'x', description: 'd' }, exec())

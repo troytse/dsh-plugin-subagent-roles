@@ -51,13 +51,11 @@ describe('delegation mode', () => {
 })
 
 describe('capability gate', () => {
-  const full = { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true }
+  const full = { agentOptions: true, outputSchema: true, depthLimit: true, agentPreset: true }
 
   test('passes when the provider supports everything requested', () => {
     assert.doesNotThrow(() => assertDelegationCapabilities({
       providerName: 'spawn',
-      persona: 'p',
-      toolFilter: { allow: ['read'] },
       agentOptions: { provider: 'x', model: 'y' },
       capabilities: full,
       maxDepth: 2,
@@ -66,8 +64,6 @@ describe('capability gate', () => {
 
   test('a missing capability names the feature and the provider', () => {
     const cases = [
-      [{ persona: 'p' }, { ...full, persona: false }, /persona/],
-      [{ toolFilter: { allow: [] } }, { ...full, toolFilter: false }, /toolFilter/],
       [{ agentOptions: { provider: 'x', model: 'y' } }, { ...full, agentOptions: false }, /agentOptions/],
       [{ maxDepth: 1 }, { ...full, depthLimit: false }, /maxDepth/],
     ]
@@ -77,6 +73,13 @@ describe('capability gate', () => {
         pattern,
       )
     }
+  })
+
+  test('persona and toolFilter are no longer transport capabilities in 0.2.1', () => {
+    assert.doesNotThrow(() => assertDelegationCapabilities({
+      providerName: 'spawn',
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false },
+    }))
   })
 
   test('nothing requested means nothing to check', () => {

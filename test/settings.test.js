@@ -154,56 +154,16 @@ describe('settings: policy normalization', () => {
   })
 })
 
-describe('settings: the live policy source', () => {
-  test('without a settings service the row config stays authoritative', () => {
+describe('settings: the row config source', () => {
+  test('the row config is authoritative without any settings service', () => {
     const host = stubCtx()
     const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ childPromptTrim: 'tools' }), namespace: 'subagent-roles' })
     assert.equal(source.read().mode, 'tools')
     assert.deepEqual(host.warnings, [])
+    assert.match(host.infos.join('\n'), /follow the plugin row config/)
   })
 
-  test('a provider that mounts later is picked up through inject', () => {
-    const settings = stubSettings()
-    let deferred
-    const host = stubCtx({ inject: (_names, callback) => { deferred = callback } })
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ childPromptTrim: 'tools' }), namespace: 'subagent-roles' })
-    assert.equal(source.read().mode, 'tools')
-    assert.equal(settings.registrations.length, 0)
-    deferred({ settings: settings.service })
-    assert.equal(settings.registrations.length, 1)
-    // The namespace now answers: the composed row config is its base layer.
-    assert.equal(source.read().mode, 'tools')
-    assert.equal(settings.registrations[0].config.base.childPromptTrim, 'tools')
-    source.dispose()
-    assert.equal(host.disposers.length, 1)
-  })
-
-  test('the row config becomes the base layer and the user layer wins', () => {
-    const settings = stubSettings({ user: { childPromptTrim: 'off' } })
-    const host = stubCtx({ settings: settings.service })
-    const source = createTrimPolicySource({
-      ctx: host.ctx,
-      config: rowConfig({ childPromptTrim: 'tools', childPromptTrimNames: ['app:web-surface'], defaultMaxToolCalls: 12 }),
-      namespace: 'subagent-roles',
-    })
-    const [registration] = settings.registrations
-    assert.equal(registration.ns, 'subagent-roles')
-    assert.equal(registration.config.applies, 'live')
-    // Every retunable key rides the ONE namespace, so a key the base omitted
-    // would silently fall back to the schema default instead of the row config.
-    assert.deepEqual(registration.config.base, {
-      childPromptTrim: 'tools',
-      childPromptTrimNames: ['app:web-surface'],
-      defaultMaxToolCalls: 12,
-      maxToolCallsHardCap: 0,
-      onToolCallBudget: 'wrap-up',
-      graceToolCalls: 1,
-    })
-    assert.equal(source.read().mode, 'off')
-    assert.match(host.infos.join('\n'), /editable in Settings/)
-  })
-
-  test('the budget defaults follow the row config without a settings service', () => {
+  test('the budget defaults follow the row config', () => {
     const host = stubCtx()
     const source = createTrimPolicySource({
       ctx: host.ctx,
@@ -213,55 +173,25 @@ describe('settings: the live policy source', () => {
     assert.deepEqual(source.readBudgetDefaults(), { maxToolCalls: 30, maxToolCallsHardCap: 40, onToolCallBudget: 'interrupt', graceToolCalls: 2 })
   })
 
-  test('a Settings edit of a budget knob reaches the very next read', () => {
-    const settings = stubSettings()
-    const host = stubCtx({ settings: settings.service })
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ defaultMaxToolCalls: 30 }), namespace: 'subagent-roles' })
-    assert.equal(source.readBudgetDefaults().maxToolCalls, 30)
-    settings.setUser({ defaultMaxToolCalls: 5, onToolCallBudget: 'off' })
-    assert.equal(source.readBudgetDefaults().maxToolCalls, 5)
-    assert.equal(source.readBudgetDefaults().onToolCallBudget, 'off')
-  })
-
-  test('a Settings edit reaches the very next read', () => {
-    const settings = stubSettings()
-    const host = stubCtx({ settings: settings.service })
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig(), namespace: 'subagent-roles' })
-    assert.equal(source.read().mode, 'full')
-    assert.deepEqual([...source.read().dropNames], [...DEFAULT_CHILD_NAMES])
-    settings.setUser({ childPromptTrim: 'tools', childPromptTrimNames: [] })
-    assert.equal(source.read().mode, 'tools')
-    assert.deepEqual([...source.read().dropNames], [])
-  })
-
-  test('a namespace that cannot register degrades to the row config and warns', () => {
-    const settings = stubSettings({ throwOnRegister: true })
-    const host = stubCtx({ settings: settings.service })
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ childPromptTrim: 'tools' }), namespace: 'subagent-roles' })
-    assert.equal(source.read().mode, 'tools')
-    assert.match(host.warnings.join('\n'), /settings namespace "subagent-roles" unavailable/)
-  })
-
-  test('an unreadable settings seam does not throw and keeps the row config', () => {
+  test('a settings service is never asked to register a namespace', () => {
+    // 0.2.1 removed `settings.register`; touching it would either throw or
+    // resurrect a namespace the host no longer renders.
     const host = stubCtx()
-    host.ctx.get = () => { throw new Error('cannot get property "settings" without inject') }
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ childPromptTrim: 'tools' }), namespace: 'subagent-roles' })
-    assert.equal(source.read().mode, 'tools')
-    assert.deepEqual(host.warnings, [])
+    let touched = 0
+    host.ctx.get = (name) => {
+      if (name !== 'settings') return undefined
+      touched += 1
+      return { register: () => { throw new Error('settings.register must not be used') } }
+    }
+    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig({ childPromptTrim: 'off' }), namespace: 'subagent-roles' })
+    assert.equal(source.read().mode, 'off')
+    assert.equal(touched, 0)
   })
 
-  test('a throwing inject seam is reported, not propagated', () => {
-    const host = stubCtx({ inject: () => { throw new Error('inject is closed') } })
-    const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig(), namespace: 'subagent-roles' })
-    assert.equal(source.read().mode, 'full')
-    assert.match(host.warnings.join('\n'), /settings service unavailable/)
-  })
-
-  test('dispose detaches the watch', () => {
-    const settings = stubSettings()
-    const host = stubCtx({ settings: settings.service })
+  test('dispose is a no-op', () => {
+    const host = stubCtx()
     const source = createTrimPolicySource({ ctx: host.ctx, config: rowConfig(), namespace: 'subagent-roles' })
     source.dispose()
-    assert.equal(settings.unwatched.length, 1)
+    assert.deepEqual(host.disposers, [])
   })
 })

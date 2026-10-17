@@ -22,7 +22,7 @@ dsh-plugin-subagent-roles
 /path/to/dsh-plugin-subagent-roles
 ```
 
-`desktop` 这个 profile 归 App 独占——`dsh plugin --profile desktop …` 会被明确拒绝（`profile "desktop" is managed exclusively by the Electron application`），所以桌面版走 Plugins 页。它会安装包、把 bundle 追加进 profile，随后该行会出现在设置页的清单里。宿主侧的行会即时加载；客户端界面（本插件的设置卡片，或其它插件的侧栏/任务页/用量页）需要刷新一次页面才会出现。
+`desktop` 这个 profile 归 App 独占——`dsh plugin --profile desktop …` 会被明确拒绝（`profile "desktop" is managed exclusively by the Electron application`），所以桌面版走 Plugins 页。它会安装包、把 bundle 追加进 profile，随后该行会出现在设置页的清单里。宿主侧的行会即时加载；客户端界面（其它插件的侧栏/任务页/用量页）需要刷新一次页面才会出现。
 
 **命令行 profile（`dsh web`、TUI、headless）**——按名字装进对应 profile，或 link 一个检出：
 
@@ -36,7 +36,7 @@ dsh plugin --profile web add link:/path/to/dsh-plugin-subagent-roles
 
 装好后重启该 profile（`dsh web`）。包内自带 bundle patch，会自行插入它的那一行组合，无需手改 composition。要求 Node.js 20 以上，以及提供 `@deepseek-ai/dsh-tools` 与 `@deepseek-ai/dsh-subagent` 的 DSH 部署。
 
-**两条依赖线都支持**：**0.1.5** 线上由 Settings → Plugins 的卡片调节本行；**0.2.0** 线上该卡片不会挂载——0.2.0 移除了插件可注册的设置命名空间——改由本行的 `config` 调节（见[设置界面](#设置界面)）。
+**版本线**：0.5.x 只支持 **DSH 0.2.1-rc.1+**；0.2.0 及更早请继续用 0.4.3。0.2.1 移除了 `subagents.start` / `startContinuable`、请求里的 `persona` / `toolFilter` 以及客户端设置服务，0.5.0 已按新 API 重写委派与 composition，角色文件格式与模型绑定不变。
 
 ## 快速开始
 
@@ -205,19 +205,20 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 
 ## 设置界面
 
-> **DSH 0.2.0+ 上卡片让位，改走挂载行 `config`。** 0.2.0 移除了客户端 `settingsScope` 服务与插件可注册的设置命名空间，所以下面这张卡片在该版本上**不会挂载**，插件只打印一次 `settings card skipped: …`。这是刻意的：把缺失的服务声明成**必需**会让整行停在 `pending`，而只要有一行没激活，**整个 web boot 就失败**。宿主半边不受影响——在 profile 补丁里本插件的挂载行 `config` 上写同名键即可（见下）。0.2.0 之前的构建行为与本文完全一致。
+**DSH 0.2.1 上本插件没有 Settings 卡片**：0.2.1 移除了客户端 `settingsScope` 服务、插件可注册的设置命名空间与 `settings.plugin.item` slot。裁剪与预算的六个旋钮就是本插件的**行 config**；在 profile 的 `cordis.patch.yml` 里写在本行 `config` 下，改动后重启该 profile（行会重新激活）。
 
-裁剪策略**与工具调用预算**共用一个宿主 settings namespace（`subagent-roles`），并在 **Settings → Plugins** 里配一张卡片，因此不改文件也能调。行 config 是该 namespace 的 `base` 层；0.2.0 之前的构建里，卡片把用户层写进 `~/.dsh/settings.yaml`，且**下一个子代理轮次**即生效（`applies: live`），无需重启。预算的四个键与行 config 同名：`defaultMaxToolCalls`、`maxToolCallsHardCap`、`onToolCallBudget`、`graceToolCalls`。角色文件自己声明的 `maxToolCalls` 仍然优先；设置层只提供"角色文件省略时的默认值"。
+| 键 | 默认 | 含义 |
+| --- | --- | --- |
+| `childPromptTrim` | `full` | `full` / `tools` / `off` |
+| `childPromptTrimNames` | 内置名单 | `full` 模式下额外丢弃的 section/context 名 |
+| `defaultMaxToolCalls` | `0` | 角色文件未声明时的默认额度；0 不限 |
+| `maxToolCallsHardCap` | `0` | 角色文件不得超过的硬上限；0 不设 |
+| `onToolCallBudget` | `wrap-up` | `wrap-up` / `interrupt` / `off` |
+| `graceToolCalls` | `1` | wrap-up 通知后的宽限调用数 |
 
-卡片外观按宿主约定由本插件自画，并**对照宿主的 `PluginCard`**：可折叠的表头（标题 + 说明 + 箭头旋转）、未保存徽标、正文表单、底部 Reset / Discard / Save，直接用宿主自己的规则与 `--dsw-alias-*` token，因此与 bash、agent-loop、subagent 模型选择那几张卡同款。两处刻意偏离并已在代码注释说明：徽标是自绘（宿主用 `Tag` 原语，但那需要声明非基线模块请求）；失败文案用 `--dsw-alias-state-error-primary`，因为宿主自己用的 `--dsw-alias-label-error` 在当前主题里**并不存在**。宿主只负责铺一列并派发 slot —— "chrome, controls, and copy" 全归插件。
+角色文件自己声明的 `maxToolCalls` 仍然优先；行 config 只提供「角色文件省略时的默认值」与硬上限。
 
-**编辑遵循宿主的卡片约定**：所有控件只渲染暂存值，Save 才写入（由 settings scope 以读取时的 revision 做栅栏）；Discard 丢弃草稿；**Reset 只暂存组合默认值、不立即写入**（写入的是 unset，因此字段重新继承部署配置，而不是把当前默认钉成覆盖值）；**没改动的字段根本不写**（用户层里"存在"即等于"已覆盖"，写它会让以后改部署配置失效）；**编辑某字段会取消该字段的 Reset 暂存**（否则你输入的内容会被静默丢掉）；清空保存后卡片自动折叠，保存失败则保持展开并保留草稿。表头的"未保存"徽标在折叠状态下也可见。
-
-**文案跟随 Language 设置**：卡片注册自己的 locale 词典（`zh` / `en`，键相同），并在注册项上声明 `locale: <namespace>`，由渲染层把 `t` 绑到该 namespace（`props.t`）；拿不到 locale 服务时退回插件自带的英文词典（`locale.bind` 绑定优先，其次英文表）。**不写"中英并列"的硬编码文案** —— 那既不跟随语言设置，也会在两种语言下都显得别扭。
-
-卡片编辑的就是行 config 那六个键（裁剪两个 + 预算四个）。两条配对规则来自宿主而非本插件：Plugins 页为**每个已服务的 namespace** 派发一个 slot key，只渲染注册在该 key 下的卡片——这就是插件要带浏览器半边的原因（`lib/client.js`，经 `dsh.client` 与 `exports["./client"]` 声明）；反之，卡片对应的 namespace 若本部署没有服务，卡片也不会被派发。用改名后的 `toolName` 挂第二行时，其 namespace 是 `subagent-roles-<tool>`，**没有卡片**（浏览器半边绑定的是默认 key），请直接改该行的 `config`（0.2.0 之前是 `settings.yaml`）。
-
-没有 settings provider 的部署仍以行 config 为唯一权威；namespace 注册失败（存量配置非法、与另一行撞名）会记一条告警并退回行 config，而不是让裁剪失效。
+没有 GUI 卡片是刻意的取舍：0.2.1 的插件配置页要求插件自己实现 `plugins.row.config` 组件并绑定 `configForms`。本版优先保证宿主半边的行为正确；浏览器半边仍会加载，只打印一次说明后不注册任何 slot，绝不会因为缺少服务让整行停在 `pending`。
 
 ## 工作原理
 
@@ -225,7 +226,7 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 - **委派**：`subagent_role` 按主代理的工作目录解析角色，然后经 `ctx.subagents` 启动子代理，带上该角色的 persona、路由与工具策略。工具面向模型的说明会跟随传输 provider：fork 型 provider 的子代理已带上本会话已完成的轮次，此时说明改成「在已有轮次上继续」，而不是「必须自带完整上下文」。路由在子代理存在之前就会经 `llm.resolveCallConfig()` 预检，因此角色文件里 `model` 或 `reasoningEffort` 写错时，报错会回到主代理手上，而不是从子代理创建过程里抛出。
 - **多行共存**：目录 section 与诊断工具都按行命名（`<toolName>:catalog`、`listToolName`），所以同一个 profile 可以为另一种传输 provider 再挂一行（`toolName: subagent_role_fork`），两边都不会撞名。
 - **子代理提示词裁剪**：核心把大多数工具说明注册成**静态文本**（只有 `dsh-tool-fs`、`dsh-tool-fs-search`、`dsh-tool-web`、`dsh-file-reference-local` 会按 scope 求值），于是子代理既继续为「被角色策略藏掉的工具」付说明费，也继续读它永远用不上的 Web GUI、harness checkout 与交付链接说明。一个 host 层的 `system-prompt/assemble` 监听器只丢这些死文本：子代理看不到的**已注册**工具的 `tool:<name>` 说明；组标签说明（`tool:jobs`、`tool:goal`）在它自身文本点到的工具全部不可见时丢弃；`full` 模式（默认）再丢命名过的提示词片段。真实委派实测：角色子代理提示词 5,765 → 1,904 字符（−67%），而主代理逐字节不变。规则推导的部分无需维护；命名的那部分是逐行可覆盖的——子代理该不该继续看到 harness checkout 或交付链接属于部署判断，不是事实。**一份名单同时匹配 section 与 context 是刻意的**：实测发现当前核心把 `context:file-reference` 注册成了 section（尽管名字里有 `context:`），只匹配 context 的名单会静默放过它。
-- **继承**：子代理加入父代理的 agent preset，因此保留父代理的提示词与工具，仅由角色策略移除其中一部分。角色 persona 只对该子代理遮蔽部署 persona 前缀。
+- **继承与 composition**：不传 `agentPreset` 时子代理加入父代理的 agent preset，因此保留父代理的提示词与工具。角色 persona 与工具策略在 `subagent/start` 时安装到子上下文——该事件在宿主 materialize 内、初始 prompt 提交之前同步触发，所以首轮 assembly 就能看到它们。角色 persona 只对该子代理遮蔽部署 persona 前缀。
 - **工具调用预算**：每行一个 host 层 `session/event` 观察者，统计本行发起过的每个子会话所提交的 `tool/call` 事件；另有一个 `session/disposed` 释放钩子，避免已结束子会话的记录滞留。委派启动时登记一条记录——`0`（不限）不登记任何东西，因此没有预算的角色零成本。跨过上限时通过 `Agent.inject()` 投递一条插件署名通知（它同时就是持久审计记录），随后由收口姿态用两种机制之一结束子代理：one-shot 用其 run 信号，continuable 用 `SubagentRuntime.interrupt()`。收口按轮次限流为一次，因此被停下那一批里从未启动的调用不会把同一次停止重复一遍。计数按子会话 id 索引，父代理、兄弟与孙代理互不共享。
 
 ## 已知边界
@@ -234,9 +235,6 @@ node scripts/inspect-session-budget.mjs <会话目录> --all --grep "你是代�
 - 隐藏工具会移除它的 schema 以及作用域感知的提示词段落；纯静态文本的段落仍会留在子代理提示词里——这正是 `childPromptTrim` 要处理的部分，也是 `tools` 模式无需维护、而 `full` 模式依赖 section 名的原因（未来核心改名后该段只是不再被裁剪，不会报错）。
 - 角色 persona 会替换子代理的部署 persona 前缀；persona 后缀（例如工作目录那一行）保留。
 - `respectModelSelection` 优先使用会话已捕获的策略（与官方委派工具写入的同一个持久 projection），没有捕获时才回退到实时 `subagent-model-selection` 设置——实时设置只用于给新会话播种。因此改动只对**尚未捕获策略**的会话生效。
-- **行 config 写 `childPromptTrim: 'off'` 会连同 Settings 卡片一起卸掉**：不注册 namespace 就没有可派发的 key，卡片不会出现（这是刻意的——运维的 `off` 应当是不可被 UI 翻回来的关闭开关）。工具调用预算与该 namespace 共用同一个键，因此 `off` 也会一并去掉设置里的预算旋钮，此时额度只来自角色文件与行 config。想在保留卡片的前提下停用裁剪，请把**卡片里的模式**设为 `off`，或行 config 用 `tools`。
-- Settings 卡片只覆盖默认行的 namespace（`subagent-roles`）。经 `toolName` 改名的第二行属于另一个 namespace，因此不显示卡片。
-- 本插件只注册**一张卡**（Settings → Plugins → Plugin configuration），不额外占一个 Settings 导航分组。插件配置走卡片是宿主约定（bash、agent-loop、subagent 模型选择、web 搜索都是卡片）；像 dshmarket 那样自成一个导航分组，是因为它有一整页浏览界面。
 - `childPromptTrim` 作用于宿主所见**每一个**子代理的组装，而不只是本插件发起的角色子代理：运行时不在子代理上记录角色标记，所以 `subagent` 等其他行的子代理同样受益。注册在 agent 自身作用域里的工具（`subagent`、`list_agents`）不在注册表的全局视图里，因此它们的说明永不被裁剪——真的能调用它的子代理会保住自己的说明。
 - 委派工具默认不声明 `timeoutMs`，前台委派因此可能比发起它的对话活得更久；长任务请用 `timeoutMs`、`maxDepth` 或派发提示词约束。
 - 工具调用预算是**反应式**收口的：跨过上限的那一次调用已经写进会话日志，插件是在它结束前停下子代理，而不是阻止它开始。计数本身是精确的。

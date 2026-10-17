@@ -22,7 +22,7 @@ dsh-plugin-subagent-roles
 /path/to/dsh-plugin-subagent-roles
 ```
 
-The `desktop` profile belongs to the application — `dsh plugin --profile desktop …` is refused on purpose (`profile "desktop" is managed exclusively by the Electron application`) — so the Plugins page is the supported channel there. It installs the package, appends the bundle to the profile, and the row then appears in the Settings inventory. Host-side rows load immediately; client-side surfaces — this plugin's Settings card, or another plugin's sidebar, task or usage pages — need one page refresh before they show up.
+The `desktop` profile belongs to the application — `dsh plugin --profile desktop …` is refused on purpose (`profile "desktop" is managed exclusively by the Electron application`) — so the Plugins page is the supported channel there. It installs the package, appends the bundle to the profile, and the row then appears in the Settings inventory. Host-side rows load immediately; client-side surfaces — another plugin's sidebar, task or usage pages — need one page refresh before they show up.
 
 **CLI profiles (`dsh web`, TUI, headless)** — install into that profile by name, or link a checkout:
 
@@ -36,7 +36,7 @@ dsh plugin --profile web add link:/path/to/dsh-plugin-subagent-roles
 
 Restart the profile afterwards (`dsh web`). The package ships a bundle patch, so it inserts its single row without any composition edit. Requires Node.js 20 or newer, together with a DSH deployment that provides `@deepseek-ai/dsh-tools` and `@deepseek-ai/dsh-subagent`.
 
-Both dependency lines are supported. On the **0.1.5** line the Settings → Plugins card tunes the row; on the **0.2.0** line that card never mounts — 0.2.0 removed plugin-registered settings namespaces — and the row's `config` is the channel instead (see [Settings](#settings)).
+**Version line**: 0.5.x supports **DSH 0.2.1-rc.1+** only; stay on 0.4.3 for 0.2.0 and earlier. 0.2.1 removed `subagents.start` / `startContinuable`, the request's `persona` / `toolFilter`, and the client settings service; 0.5.0 rewrote delegation and composition against the new API while keeping the role-file format and per-role model binding unchanged.
 
 ## Quick start
 
@@ -205,19 +205,20 @@ The script decodes a session log read-only and prints the system-prompt size, th
 
 ## Settings
 
-> **On DSH 0.2.0+ the card stands down and the row `config` is the channel.** 0.2.0 removed the client `settingsScope` service together with plugin-registered settings namespaces, so the card described below does not mount there; the plugin logs a single `settings card skipped: …` line instead. That is deliberate: a REQUIRED-but-absent service leaves the row `pending`, and one unactivated row fails the entire web boot. The Host half is unaffected — set the same keys on the plugin's mount row `config` in the profile patch (see below). Pre-0.2.0 builds behave exactly as before.
+**There is no Settings card on DSH 0.2.1**: 0.2.1 removed the client `settingsScope` service, plugin-registered settings namespaces, and the `settings.plugin.item` slot. The six trim/budget knobs are the plugin's **row config**; write them under this row's `config` in the profile's `cordis.patch.yml` and restart the profile (the row re-activates).
 
-The trim policy **and the tool-call budget** are published as one host settings namespace (`subagent-roles`) and paired with a card in **Settings → Plugins**, so a deployment can retune them without editing files. The row config is the namespace's `base` layer; on pre-0.2.0 builds the card writes the user layer to `~/.dsh/settings.yaml`, and the change applies to the next child turn (`applies: live`) with no restart. The budget knobs are `defaultMaxToolCalls`, `maxToolCallsHardCap`, `onToolCallBudget`, and `graceToolCalls` — the same names the row config takes. A role file's own `maxToolCalls` still wins; the settings layer supplies the default a role file omitted.
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `childPromptTrim` | `full` | `full` / `tools` / `off` |
+| `childPromptTrimNames` | built-in list | extra section/context names dropped in `full` mode |
+| `defaultMaxToolCalls` | `0` | budget when a role file omits one; 0 is unlimited |
+| `maxToolCallsHardCap` | `0` | ceiling a role file cannot exceed; 0 disables |
+| `onToolCallBudget` | `wrap-up` | `wrap-up` / `interrupt` / `off` |
+| `graceToolCalls` | `1` | grace calls after the wrap-up notice |
 
-The card draws its own chrome, which the host requires of any browser half, following the host's `PluginCard`: a collapsible header (title, description, rotating chevron), an unsaved badge, the staged form, and Reset / Discard / Save in the footer, styled with the host's own rules and the same `--dsw-alias-*` tokens as the bash, agent-loop, subagent-model-selection, and web-search cards. Two deliberate deviations: the badge is hand-drawn instead of the host's `Tag` primitive, and the failure line uses `--dsw-alias-state-error-primary` (the host's own `--dsw-alias-label-error` is not defined in the installed theme).
+A role file's own `maxToolCalls` still wins; the row config supplies the omission default and the hard cap.
 
-Editing follows the host's card conventions: every control renders staged text, nothing is written before Save (the settings scope fences the write with the revision the draft read), Discard drops the drafts, and a reset only STAGES the composed default — the write it performs is a clear, so the field re-inherits the deployment config instead of pinning today's default as an override. A field whose staged text still equals the resolved value is not written at all, so editing one field never pins the other. Editing a field cancels a reset staged for it. A clean save collapses the card; a failed save stays open with the drafts intact and the header's unsaved badge visible.
-
-All copy follows the **Language** setting: the card registers its own locale dictionaries (`zh` / `en`, identical keys) and declares `locale: <namespace>` on the registration, so the renderer binds `t` for it. With no locale service it falls back to its own binding, then to the English dictionary — never to hard-coded bilingual labels.
-
-The card edits the same keys the row config takes. Two pairing rules come from the host, not from this plugin: the Plugins tab dispatches one slot key per served namespace and renders only the cards registered under those keys, which is why the plugin ships a browser half (`lib/client.js`, declared through `dsh.client` and `exports["./client"]`); and a card whose namespace the deployment does not serve is never dispatched. A deployment that mounts a second row under a renamed tool gets the namespace `subagent-roles-<tool>` — that one has no card (the browser half binds the default key), so tune it in that row's `config` directly (pre-0.2.0: `settings.yaml`).
-
-A deployment without a settings provider keeps the row config as the sole authority; a namespace that refuses to register (an invalid stored section, a duplicate from another row) is logged and degrades to the row config rather than costing the trim.
+The missing GUI card is a deliberate trade-off: a 0.2.1 config page requires the plugin to implement a `plugins.row.config` component bound to `configForms`. This release prioritizes host-side correctness; the browser half still loads, explains the situation once, and registers no slot, so a missing service can never leave the row `pending`.
 
 ## How it works
 
@@ -234,9 +235,6 @@ A deployment without a settings provider keeps the row config as the sole author
 - Hiding a tool removes its schema and any scope-aware prompt guidance. Prompt sections with static text stay in the child's prompt — which is what `childPromptTrim` removes, and why `tools` mode needs no maintenance while `full` mode matches section names that a future core release may rename (a renamed section stops being trimmed; nothing breaks).
 - A role persona replaces the deployment persona prefix for the child. The persona suffix, such as the working-directory line, is kept.
 - `respectModelSelection` prefers the policy a Session captured (the same durable projection the official delegation tool writes) and falls back to the live `subagent-model-selection` setting, which is what seeds a fresh Session. A change therefore applies to Sessions that have not captured a policy yet.
-- The plugin contributes one card (Settings → Plugins → Plugin configuration) and no Settings navigation group of its own. A card is the host convention for plugin configuration; a dedicated section like the plugin market's exists because that plugin owns a whole browsing page.
-- `childPromptTrim: 'off'` in the row config unmounts the Settings card with the trim: no namespace is registered, so the Plugins tab has no key to dispatch (deliberate — an operator's `off` is a kill switch the UI must not be able to flip back). The tool-call budget rides that same namespace, so `off` also removes the budget knobs from Settings; budgets then come from role files and the row config only. To stop trimming while keeping the card, set the CARD's mode to `off`, or use `tools` in the row config.
-- The Settings card covers the default row's namespace (`subagent-roles`). A second row renamed through `toolName` owns a different namespace and therefore shows no card.
 - `childPromptTrim` applies to EVERY subagent assembly the host plane observes, not only to children this plugin started: the runtime records no role marker on a child, so `subagent` and counterpart rows benefit too. Tools registered in an agent's own scope (`subagent`, `list_agents`) are absent from the registry's global view, so their guidance is never trimmed — a child that really can call one keeps its instructions.
 - The delegation tool declares no `timeoutMs` unless you set one; an unbounded foreground delegation can outlive the conversation that started it. Bound long runs with `timeoutMs`, `maxDepth`, or the dispatch prompt.
 - The tool-call budget is enforced **reactively**: the call that crosses the limit is already in the session log, so the child is stopped before that call finishes rather than being prevented from starting it. The count itself is exact.
